@@ -22,34 +22,35 @@ document.addEventListener('DOMContentLoaded', () => {
     // STUN + TURN for reliable NAT traversal across home/mobile networks.
     // TURN relay (openrelay.metered.ca) is a free public relay server used as fallback
     // when both sides are behind strict firewalls/NAT and direct peer-to-peer fails.
-    const PEER_CONFIG = {
-        config: {
-            iceServers: [
-                // STUN: discovers public IP
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun.cloudflare.com:3478' },
-                { urls: 'stun:openrelay.metered.ca:80' },
-                // TURN UDP — relay traffic when direct P2P fails
-                {
-                    urls: 'turn:openrelay.metered.ca:80',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                },
-                // TURN TCP — works through most restrictive firewalls
-                {
-                    urls: 'turn:openrelay.metered.ca:80?transport=tcp',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                },
-                // TURNS over TLS port 443 — bypasses corporate firewalls
-                {
-                    urls: 'turns:openrelay.metered.ca:443',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                }
-            ]
+    const ICE_SERVERS = [
+        // STUN: discovers public IP
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'stun:openrelay.metered.ca:80' },
+        // TURN UDP — relay traffic when direct P2P fails
+        {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        // TURN TCP — works through most restrictive firewalls
+        {
+            urls: 'turn:openrelay.metered.ca:80?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        // TURNS over TLS port 443 — bypasses corporate firewalls
+        {
+            urls: 'turns:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
         }
+    ];
+
+    // PeerJS options — MUST be second argument; first arg is the peer ID (string or null)
+    const PEER_OPTIONS = {
+        config: { iceServers: ICE_SERVERS }
     };
 
     // State
@@ -125,7 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function initHost() {
         isHost = true;
         const hostRoomId = 'mw-' + Math.random().toString(36).substring(2, 8);
-        peer = new Peer(hostRoomId, PEER_CONFIG);
+        peer = new Peer(hostRoomId, PEER_OPTIONS);
 
         updateStatus('Creating Room...', 'badge-offline');
 
@@ -196,21 +197,43 @@ document.addEventListener('DOMContentLoaded', () => {
     // ──────────────────────────────────────────
     // 2. VIEWER MODE
     // ──────────────────────────────────────────
+    let viewerRetryTimer = null;
+    let viewerAttempt = 0;
+
     function initViewer(hostId) {
         isHost = false;
-        peer = new Peer(PEER_CONFIG);
+        viewerAttempt++;
 
-        screenShareBtn.style.display = 'none'; // Viewer doesn't host screen
-        placeholderText.textContent = 'Connecting to host...';
+        // Destroy existing peer cleanly before retrying
+        if (peer) { try { peer.destroy(); } catch(e) {} peer = null; }
+
+        // CRITICAL FIX: pass null as ID so PeerJS auto-generates one,
+        // then pass PEER_OPTIONS as 2nd arg so TURN servers are actually applied.
+        peer = new Peer(null, PEER_OPTIONS);
+
+        screenShareBtn.style.display = 'none';
+        placeholderText.textContent = viewerAttempt > 1
+            ? `Reconnecting... (attempt ${viewerAttempt})`
+            : 'Connecting to host...';
         updateStatus('Connecting...', 'badge-offline');
+
+        // Auto-retry after 18 seconds if still not connected
+        clearTimeout(viewerRetryTimer);
+        viewerRetryTimer = setTimeout(() => {
+            if (!connectedPeers.has(hostId)) {
+                appendMessage('system', '⚠️ Connection timed out, retrying automatically...');
+                initViewer(hostId);
+            }
+        }, 18000);
 
         peer.on('open', () => {
             appendMessage('system', `Connecting to host room: ${hostId}...`);
 
-            const conn = peer.connect(hostId);
+            const conn = peer.connect(hostId, { reliable: true });
             setupChatConnection(conn);
 
             conn.on('open', () => {
+                clearTimeout(viewerRetryTimer);
                 connectedPeers.add(hostId);
                 updateStatus('Connected to Host', 'badge-connected');
                 placeholderText.textContent = 'Waiting for host to share screen...';
@@ -232,7 +255,9 @@ document.addEventListener('DOMContentLoaded', () => {
         peer.on('error', (err) => {
             console.error('Viewer peer error:', err);
             updateStatus('Connection Error', 'badge-offline');
-            appendMessage('system', `Could not connect to host. Make sure the room link is correct.`);
+            appendMessage('system', `Connection error (${err.type}). Retrying in 5 seconds...`);
+            clearTimeout(viewerRetryTimer);
+            viewerRetryTimer = setTimeout(() => initViewer(hostId), 5000);
         });
     }
 
