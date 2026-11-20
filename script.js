@@ -27,10 +27,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let roomId = null;
     let connectedPeers = new Set(); // Track remote peer IDs
 
-    // Check if user is joining an existing room via URL hash (e.g., #mw-abc123)
+    // Check if user is joining an existing room via query param (?room=...), hash (#...), or path
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get('room');
     const urlHash = window.location.hash.replace('#', '').trim();
-    if (urlHash) {
-        roomId = urlHash;
+    const pathMatch = window.location.pathname.match(/mw-[a-z0-9]+/i);
+
+    roomId = roomParam || urlHash || (pathMatch ? pathMatch[0] : null);
+    if (roomId) {
         initViewer(roomId);
     } else {
         updateStatus('Ready to Host', 'badge-offline');
@@ -94,7 +98,15 @@ document.addEventListener('DOMContentLoaded', () => {
             roomId = id;
             updateStatus('Live • Hosting', 'badge-live');
 
-            const shareUrl = `${window.location.origin}${window.location.pathname}#${id}`;
+            // Bulletproof share URL: works on Netlify and local files, works with all chat apps
+            let shareUrl = '';
+            if (window.location.protocol === 'file:') {
+                shareUrl = `${window.location.href.split('?')[0].split('#')[0]}?room=${id}`;
+            } else {
+                let cleanPath = window.location.pathname.replace(/\/index\.html$/i, '');
+                if (!cleanPath.endsWith('/')) cleanPath += '/';
+                shareUrl = `${window.location.origin}${cleanPath}?room=${id}`;
+            }
             shareLinkInput.value = shareUrl;
             shareBox.classList.remove('hidden');
 
