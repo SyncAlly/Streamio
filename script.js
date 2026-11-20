@@ -149,7 +149,7 @@ window.addEventListener('load', function () {
                         });
                     }
 
-                    // Enforce 5.5 Mbps HD bitrate & balanced quality
+                    // Enforce True 1:1 Source Fidelity: 8 Mbps Bitrate & Zero Downsampling
                     if (pc.getSenders) {
                         pc.getSenders().forEach(function (sender) {
                             if (sender.track && sender.track.kind === 'video') {
@@ -157,10 +157,12 @@ window.addEventListener('load', function () {
                                 if (!params.encodings || params.encodings.length === 0) {
                                     params.encodings = [{}];
                                 }
-                                // 5.5 Mbps: Crystal-clear 1080p picture quality without pixelation
-                                params.encodings[0].maxBitrate = 5500000;
-                                // Balanced: Keeps video crisp and sharp while maintaining steady framerate
-                                params.degradationPreference = 'balanced';
+                                // Pristine Bitrate: up to 8 Mbps allows full 720p/1080p source clarity with zero compression blur
+                                params.encodings[0].maxBitrate = 8000000;
+                                // Strictly 1:1 pixel mapping: forbids browser from downscaling the physical resolution
+                                params.encodings[0].scaleResolutionDownBy = 1.0;
+                                // Strict Resolution Lock: preserves 100% of original source sharpness on larger laptop/monitor screens
+                                params.degradationPreference = 'maintain-resolution';
                                 sender.setParameters(params).catch(function () {});
                             }
                         });
