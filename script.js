@@ -19,23 +19,17 @@ window.addEventListener('load', function () {
     const messageInput   = document.getElementById('message-input');
     const messagesList   = document.getElementById('messages');
 
-    // ── STUN + TURN config ────────────────────────────────────────────────────
-    // TURN relay is used when direct P2P fails across different routers/networks
+    // ── STUN Server list for Direct P2P NAT Traversal ─────────────────────────
+    // Fast, resilient multi-region STUN servers
     const PEER_OPTIONS = {
         config: {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun.cloudflare.com:3478' },
-                // TURN UDP relay
-                { urls: 'turn:openrelay.metered.ca:80',
-                  username: 'openrelayproject', credential: 'openrelayproject' },
-                // TURN TCP (works through most home firewalls)
-                { urls: 'turn:openrelay.metered.ca:80?transport=tcp',
-                  username: 'openrelayproject', credential: 'openrelayproject' },
-                // TURNS over port 443 (bypasses strict firewalls)
-                { urls: 'turns:openrelay.metered.ca:443',
-                  username: 'openrelayproject', credential: 'openrelayproject' }
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' },
+                { urls: 'stun:stun.cloudflare.com:3478' }
             ]
         }
     };
