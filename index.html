@@ -26,6 +26,9 @@
                 </div>
             </div>
 
+            <!-- Hidden Audio Element for Friend's Microphone Voice -->
+            <audio id="voice-audio" autoplay></audio>
+
             <!-- Share Room Link Box (appears when hosting) -->
             <div id="share-box" class="share-box hidden">
                 <span class="share-label">🔗 Share this link with your friend:</span>
@@ -38,7 +41,10 @@
             <!-- Player Controls -->
             <div id="controls">
                 <button id="screen-share-btn" class="btn btn-primary">Start Screen Share</button>
-                <button id="mute-btn" class="btn btn-secondary">Mute</button>
+                <!-- 2-Way Voice Chat (Mic) Button -->
+                <button id="mic-btn" class="btn btn-secondary">🎙️ Join Voice Chat</button>
+                <!-- Movie Speaker Volume Button -->
+                <button id="speaker-btn" class="btn btn-secondary">🔊 Movie Audio</button>
                 <button id="pause-btn" class="btn btn-secondary">Pause</button>
                 <button id="fullscreen-btn" class="btn btn-secondary">Fullscreen</button>
             </div>
@@ -60,7 +66,7 @@
     </main>
 
     <footer>
-        <p>Movie Watcher &bull; Real-Time P2P WebRTC Streaming</p>
+        <p>Movie Watcher &bull; Real-Time P2P WebRTC Video &amp; Voice Streaming</p>
     </footer>
 
     <script src="script.js" defer></script>
