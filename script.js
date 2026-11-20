@@ -62,29 +62,93 @@ window.addEventListener('load', function () {
     let isHost           = false;
     let roomId           = null;
 
-    // ── Force Tailscale: unmask mDNS .local → real Tailscale IP on host ───────
-    // Chrome hides private IPs (100.x, 192.168.x) behind anonymous .local names.
-    // This patch intercepts WebRTC SDP on the host and replaces the anonymous
-    // .local alias with the real Tailscale IP (100.109.86.125) so the phone
-    // can reach the PC directly across different Wi-Fi networks via Tailscale.
+    // ── Tailscale Enforcer: Force Tailscale (100.x) and Block Local Wi-Fi (192.168.x) ──
     const TAILSCALE_HOST_IP = '100.109.86.125';
-    const MDNS_LOCAL_RE = /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.local/gi;
 
     (function patchRTCForTailscale() {
         if (typeof RTCPeerConnection === 'undefined') return;
 
-        var _origSetLocal = RTCPeerConnection.prototype.setLocalDescription;
-        RTCPeerConnection.prototype.setLocalDescription = function (desc) {
-            // Only rewrite on the HOST side when SDP has .local mDNS candidates
-            if (isHost && desc && typeof desc.sdp === 'string' && MDNS_LOCAL_RE.test(desc.sdp)) {
-                MDNS_LOCAL_RE.lastIndex = 0;
-                var mungedSdp = desc.sdp.replace(MDNS_LOCAL_RE, TAILSCALE_HOST_IP);
-                // Create a plain object — RTCSessionDescription.sdp is readonly
-                desc = { type: desc.type, sdp: mungedSdp };
+        // 1. Intercept addIceCandidate: Drop any 192.168.x LAN candidate & rewrite .local
+        var _origAdd = RTCPeerConnection.prototype.addIceCandidate;
+        RTCPeerConnection.prototype.addIceCandidate = function (candidate) {
+            if (candidate && candidate.candidate) {
+                var c = candidate.candidate;
+                // DROP local Wi-Fi candidates so WebRTC is forced to pick Tailscale!
+                if (c.indexOf(' 192.168.') !== -1 || c.indexOf(' 10.') !== -1 || c.indexOf(' 172.16.') !== -1) {
+                    return Promise.resolve();
+                }
+                // Rewrite any mDNS .local to Tailscale IP
+                if (c.indexOf('.local') !== -1) {
+                    c = c.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
+                    try {
+                        candidate = new RTCIceCandidate({
+                            candidate: c,
+                            sdpMid: candidate.sdpMid,
+                            sdpMLineIndex: candidate.sdpMLineIndex
+                        });
+                    } catch (e) {
+                        candidate.candidate = c;
+                    }
+                }
             }
-            MDNS_LOCAL_RE.lastIndex = 0;
-            return _origSetLocal.apply(this, [desc]);
+            return _origAdd.apply(this, [candidate]);
         };
+
+        // 2. Intercept setRemoteDescription: Remove 192.168.x candidate lines from SDP
+        var _origSetRemote = RTCPeerConnection.prototype.setRemoteDescription;
+        RTCPeerConnection.prototype.setRemoteDescription = function (desc) {
+            if (desc && typeof desc.sdp === 'string') {
+                var lines = desc.sdp.split('\r\n');
+                var clean = lines.filter(function (l) {
+                    return !(l.startsWith('a=candidate:') && (l.indexOf(' 192.168.') !== -1 || l.indexOf(' 10.') !== -1 || l.indexOf(' 172.16.') !== -1));
+                }).map(function (l) {
+                    if (l.startsWith('a=candidate:') && l.indexOf('.local') !== -1) {
+                        return l.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
+                    }
+                    return l;
+                });
+                desc = { type: desc.type, sdp: clean.join('\r\n') };
+            }
+            return _origSetRemote.apply(this, [desc]);
+        };
+
+        // 3. Intercept onicecandidate setter: Host sends 100.109.86.125 instead of 192.168.x / .local
+        var descProp = Object.getOwnPropertyDescriptor(RTCPeerConnection.prototype, 'onicecandidate');
+        if (descProp && descProp.set) {
+            var _origSetOnIce = descProp.set;
+            Object.defineProperty(RTCPeerConnection.prototype, 'onicecandidate', {
+                set: function (fn) {
+                    if (typeof fn !== 'function') return _origSetOnIce.call(this, fn);
+                    var wrapped = function (evt) {
+                        if (evt && evt.candidate && evt.candidate.candidate) {
+                            var str = evt.candidate.candidate;
+                            // On the host: turn any host candidate into a Tailscale 100.109.86.125 candidate
+                            if (isHost && (str.indexOf('typ host') !== -1 || str.indexOf('.local') !== -1)) {
+                                str = str.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
+                                str = str.replace(/ 192\.168\.\d+\.\d+ /g, ' ' + TAILSCALE_HOST_IP + ' ');
+                                try {
+                                    evt = {
+                                        candidate: new RTCIceCandidate({
+                                            candidate: str,
+                                            sdpMid: evt.candidate.sdpMid,
+                                            sdpMLineIndex: evt.candidate.sdpMLineIndex
+                                        })
+                                    };
+                                } catch (e) {}
+                            }
+                            // Drop remaining 192.168.x candidate so it is never transmitted
+                            if (str.indexOf(' 192.168.') !== -1) {
+                                return;
+                            }
+                        }
+                        return fn.apply(this, arguments);
+                    };
+                    return _origSetOnIce.call(this, wrapped);
+                },
+                get: descProp.get,
+                configurable: true
+            });
+        }
     })();
 
     // ── Detect room ID from URL (?room=... OR #mw-... OR path) ────────────────
