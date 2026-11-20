@@ -1,411 +1,352 @@
-document.addEventListener('DOMContentLoaded', () => {
-    // DOM Elements
-    const videoContainer = document.getElementById('video-container');
-    const videoPlayer = document.getElementById('video-player');
-    const voiceAudio = document.getElementById('voice-audio');
-    const placeholder = document.getElementById('video-placeholder');
-    const placeholderText = document.getElementById('placeholder-text');
-    const unmuteOverlayBtn = document.getElementById('unmute-overlay-btn');
-    const statusBadge = document.getElementById('status-badge');
+// Wait for EVERYTHING (including PeerJS CDN script) to fully load before running
+window.addEventListener('load', function () {
+
+    // ── DOM refs ──────────────────────────────────────────────────────────────
+    const videoPlayer    = document.getElementById('video-player');
+    const voiceAudio     = document.getElementById('voice-audio');
+    const placeholder    = document.getElementById('video-placeholder');
+    const placeholderText= document.getElementById('placeholder-text');
+    const statusBadge    = document.getElementById('status-badge');
     const screenShareBtn = document.getElementById('screen-share-btn');
-    const micBtn = document.getElementById('mic-btn');
-    const speakerBtn = document.getElementById('speaker-btn');
-    const pauseBtn = document.getElementById('pause-btn');
-    const fullscreenBtn = document.getElementById('fullscreen-btn');
-    const shareBox = document.getElementById('share-box');
+    const micBtn         = document.getElementById('mic-btn');
+    const speakerBtn     = document.getElementById('speaker-btn');
+    const pauseBtn       = document.getElementById('pause-btn');
+    const fullscreenBtn  = document.getElementById('fullscreen-btn');
+    const shareBox       = document.getElementById('share-box');
     const shareLinkInput = document.getElementById('share-link-input');
-    const copyLinkBtn = document.getElementById('copy-link-btn');
-    const chatForm = document.getElementById('chat-form');
-    const messageInput = document.getElementById('message-input');
-    const messagesList = document.getElementById('messages');
+    const copyLinkBtn    = document.getElementById('copy-link-btn');
+    const chatForm       = document.getElementById('chat-form');
+    const messageInput   = document.getElementById('message-input');
+    const messagesList   = document.getElementById('messages');
 
-    // STUN + TURN for reliable NAT traversal across home/mobile networks.
-    // TURN relay (openrelay.metered.ca) is a free public relay server used as fallback
-    // when both sides are behind strict firewalls/NAT and direct peer-to-peer fails.
-    const ICE_SERVERS = [
-        // STUN: discovers public IP
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun.cloudflare.com:3478' },
-        { urls: 'stun:openrelay.metered.ca:80' },
-        // TURN UDP — relay traffic when direct P2P fails
-        {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        // TURN TCP — works through most restrictive firewalls
-        {
-            urls: 'turn:openrelay.metered.ca:80?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        // TURNS over TLS port 443 — bypasses corporate firewalls
-        {
-            urls: 'turns:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        }
-    ];
-
-    // PeerJS options — MUST be second argument; first arg is the peer ID (string or null)
+    // ── STUN + TURN config ────────────────────────────────────────────────────
+    // TURN relay is used when direct P2P fails across different routers/networks
     const PEER_OPTIONS = {
-        config: { iceServers: ICE_SERVERS }
+        config: {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun.cloudflare.com:3478' },
+                // TURN UDP relay
+                { urls: 'turn:openrelay.metered.ca:80',
+                  username: 'openrelayproject', credential: 'openrelayproject' },
+                // TURN TCP (works through most home firewalls)
+                { urls: 'turn:openrelay.metered.ca:80?transport=tcp',
+                  username: 'openrelayproject', credential: 'openrelayproject' },
+                // TURNS over port 443 (bypasses strict firewalls)
+                { urls: 'turns:openrelay.metered.ca:443',
+                  username: 'openrelayproject', credential: 'openrelayproject' }
+            ]
+        }
     };
 
-    // State
-    let peer = null;
-    let localStream = null;      // Screen share stream
-    let localMicStream = null;   // Microphone stream for voice chat
-    let micTrack = null;
-    let activeConnections = [];  // Data channels for chat
-    let isHost = false;
-    let roomId = null;
-    let connectedPeers = new Set(); // Track remote peer IDs
+    // ── State ─────────────────────────────────────────────────────────────────
+    let peer             = null;
+    let localStream      = null;   // screen-share stream (host)
+    let localMicStream   = null;   // mic stream (both sides)
+    let micTrack         = null;
+    let activeConns      = [];     // data channels for chat
+    let connectedPeers   = new Set();
+    let isHost           = false;
+    let roomId           = null;
 
-    // Check if user is joining an existing room via query param (?room=...), hash (#...), or path
-    const urlParams = new URLSearchParams(window.location.search);
-    const roomParam = urlParams.get('room');
-    const urlHash = window.location.hash.replace('#', '').trim();
-    const pathMatch = window.location.pathname.match(/mw-[a-z0-9]+/i);
+    // ── Detect room ID from URL (?room=... OR #mw-... OR path) ────────────────
+    const params   = new URLSearchParams(window.location.search);
+    const fromQuery = params.get('room') || '';
+    const fromHash  = window.location.hash.replace('#', '').trim();
+    const fromPath  = (window.location.pathname.match(/mw-[a-z0-9]+/i) || [])[0] || '';
+    roomId = fromQuery || fromHash || fromPath || null;
 
-    roomId = roomParam || urlHash || (pathMatch ? pathMatch[0] : null);
+    // ── Boot ──────────────────────────────────────────────────────────────────
     if (roomId) {
-        initViewer(roomId);
+        startViewer(roomId);
     } else {
         updateStatus('Ready to Host', 'badge-offline');
     }
 
-    // ──────────────────────────────────────────
-    // 1. HOST MODE (Screen Share)
-    // ──────────────────────────────────────────
-    screenShareBtn.addEventListener('click', async () => {
-        if (localStream) {
-            stopScreenShare();
+    // ══════════════════════════════════════════════════════════════════════════
+    // 1. HOST — Screen Share
+    // ══════════════════════════════════════════════════════════════════════════
+    screenShareBtn.addEventListener('click', async function () {
+        if (localStream) { stopShare(); return; }
+
+        try {
+            localStream = await navigator.mediaDevices.getDisplayMedia({
+                video: { cursor: 'always', frameRate: { ideal: 60, max: 60 } },
+                audio: true
+            });
+        } catch (e) {
+            appendMsg('system', 'Screen sharing was cancelled or denied.');
             return;
         }
 
-        try {
-            // High-quality 60 FPS capture with tab audio
-            localStream = await navigator.mediaDevices.getDisplayMedia({
-                video: {
-                    cursor: 'always',
-                    frameRate: { ideal: 60, max: 60 }
-                },
-                audio: true // Captures movie/tab audio
+        videoPlayer.srcObject = localStream;
+        videoPlayer.muted = true;
+        videoPlayer.play().catch(() => {});
+        placeholder.classList.add('hidden');
+        screenShareBtn.textContent = 'Stop Sharing';
+        screenShareBtn.className = 'btn btn-danger';
+
+        localStream.getVideoTracks()[0].addEventListener('ended', stopShare);
+
+        if (!peer) {
+            startHost();
+        } else {
+            connectedPeers.forEach(function (pid) {
+                peer.call(pid, localStream, { metadata: { type: 'screen' } });
             });
-
-            videoPlayer.srcObject = localStream;
-            videoPlayer.muted = true; // Mute host's own preview to prevent echo
-            await videoPlayer.play();
-            placeholder.classList.add('hidden');
-
-            localStream.getVideoTracks()[0].addEventListener('ended', () => {
-                stopScreenShare();
-            });
-
-            screenShareBtn.textContent = 'Stop Sharing';
-            screenShareBtn.classList.remove('btn-primary');
-            screenShareBtn.classList.add('btn-danger');
-
-            if (!peer) {
-                initHost();
-            } else {
-                // Broadcast screen to all connected viewers
-                connectedPeers.forEach(peerId => {
-                    peer.call(peerId, localStream, { metadata: { type: 'screen' } });
-                });
-            }
-
-        } catch (err) {
-            console.error('Screen sharing canceled or failed:', err);
-            appendMessage('system', 'Screen sharing was canceled or denied.');
         }
     });
 
-    function initHost() {
+    function startHost() {
         isHost = true;
-        const hostRoomId = 'mw-' + Math.random().toString(36).substring(2, 8);
-        peer = new Peer(hostRoomId, PEER_OPTIONS);
+        const hostId = 'mw-' + Math.random().toString(36).substring(2, 8);
+        peer = new Peer(hostId, PEER_OPTIONS);
 
-        updateStatus('Creating Room...', 'badge-offline');
+        updateStatus('Creating Room…', 'badge-offline');
 
-        peer.on('open', (id) => {
+        peer.on('open', function (id) {
             roomId = id;
             updateStatus('Live • Hosting', 'badge-live');
 
-            // Bulletproof share URL: works on Netlify and local files, works with all chat apps
-            let shareUrl = '';
-            if (window.location.protocol === 'file:') {
-                shareUrl = `${window.location.href.split('?')[0].split('#')[0]}?room=${id}`;
-            } else {
-                let cleanPath = window.location.pathname.replace(/\/index\.html$/i, '');
-                if (!cleanPath.endsWith('/')) cleanPath += '/';
-                shareUrl = `${window.location.origin}${cleanPath}?room=${id}`;
-            }
+            // Build share URL — keep same origin, strip index.html from path
+            var base = window.location.origin;
+            var path = window.location.pathname.replace(/\/index\.html$/i, '');
+            if (!path.endsWith('/')) path += '/';
+            var shareUrl = base + path + '?room=' + id;
+
             shareLinkInput.value = shareUrl;
             shareBox.classList.remove('hidden');
-
-            // Also update browser address bar so copying from either the box or the address bar works!
-            try { window.history.replaceState(null, '', shareUrl); } catch(e) {}
-
-            appendMessage('system', `Room created! Send the link above to your friend.`);
+            appendMsg('system', 'Room ready! Share the link above with your friend.');
         });
 
-        // Incoming connection for chat & peer tracking
-        peer.on('connection', (conn) => {
-            setupChatConnection(conn);
-
-            conn.on('open', () => {
+        peer.on('connection', function (conn) {
+            setupChat(conn);
+            conn.on('open', function () {
                 connectedPeers.add(conn.peer);
-                appendMessage('system', 'A friend joined your room!');
+                appendMsg('system', 'Your friend joined!');
                 updateStatus('Live • Friend Connected', 'badge-connected');
-
-                // Send screen share stream to friend
-                if (localStream) {
-                    peer.call(conn.peer, localStream, { metadata: { type: 'screen' } });
-                }
-
-                // If host's mic is already active, call friend with voice stream
-                if (localMicStream) {
-                    peer.call(conn.peer, localMicStream, { metadata: { type: 'voice' } });
-                }
+                if (localStream) peer.call(conn.peer, localStream, { metadata: { type: 'screen' } });
+                if (localMicStream) peer.call(conn.peer, localMicStream, { metadata: { type: 'voice' } });
             });
         });
 
-        // Handle incoming calls (e.g. friend calling with their mic stream)
-        peer.on('call', handleIncomingCall);
-
-        peer.on('error', (err) => {
-            console.error('Host peer error:', err);
-            appendMessage('system', `Connection notice: ${err.type}`);
+        peer.on('call', handleCall);
+        peer.on('error', function (err) {
+            appendMsg('system', 'Host error: ' + err.type);
         });
     }
 
-    function stopScreenShare() {
-        if (localStream) {
-            localStream.getTracks().forEach(t => t.stop());
-            localStream = null;
-        }
+    function stopShare() {
+        if (localStream) { localStream.getTracks().forEach(function (t) { t.stop(); }); localStream = null; }
         videoPlayer.srcObject = null;
         placeholder.classList.remove('hidden');
         placeholderText.textContent = 'Screen share stopped';
         screenShareBtn.textContent = 'Start Screen Share';
-        screenShareBtn.classList.remove('btn-danger');
-        screenShareBtn.classList.add('btn-primary');
-        updateStatus('Ready to Host', 'badge-offline');
+        screenShareBtn.className = 'btn btn-primary';
         shareBox.classList.add('hidden');
-        try { window.history.replaceState(null, '', window.location.pathname); } catch(e) {}
-        appendMessage('system', 'You stopped screen sharing.');
+        updateStatus('Ready to Host', 'badge-offline');
+        appendMsg('system', 'You stopped sharing.');
     }
 
-    // ──────────────────────────────────────────
-    // 2. VIEWER MODE
-    // ──────────────────────────────────────────
-    let viewerRetryTimer = null;
-    let viewerAttempt = 0;
-
-    function initViewer(hostId) {
+    // ══════════════════════════════════════════════════════════════════════════
+    // 2. VIEWER
+    // ══════════════════════════════════════════════════════════════════════════
+    function startViewer(hostId) {
         isHost = false;
-        viewerAttempt++;
-
-        // Destroy existing peer cleanly before retrying
-        if (peer) { try { peer.destroy(); } catch(e) {} peer = null; }
-
-        // CRITICAL FIX: pass null as ID so PeerJS auto-generates one,
-        // then pass PEER_OPTIONS as 2nd arg so TURN servers are actually applied.
-        peer = new Peer(null, PEER_OPTIONS);
-
         screenShareBtn.style.display = 'none';
-        placeholderText.textContent = viewerAttempt > 1
-            ? `Reconnecting... (attempt ${viewerAttempt})`
-            : 'Connecting to host...';
-        updateStatus('Connecting...', 'badge-offline');
+        placeholderText.textContent = 'Connecting to host…';
+        updateStatus('Connecting…', 'badge-offline');
 
-        // Auto-retry after 18 seconds if still not connected
-        clearTimeout(viewerRetryTimer);
-        viewerRetryTimer = setTimeout(() => {
-            if (!connectedPeers.has(hostId)) {
-                appendMessage('system', '⚠️ Connection timed out, retrying automatically...');
-                initViewer(hostId);
-            }
-        }, 18000);
+        // Destroy any old peer cleanly
+        if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
 
-        peer.on('open', () => {
-            appendMessage('system', `Connecting to host room: ${hostId}...`);
+        peer = new Peer(undefined, PEER_OPTIONS);
 
-            const conn = peer.connect(hostId, { reliable: true });
-            setupChatConnection(conn);
+        peer.on('open', function () {
+            appendMsg('system', 'Connecting to room ' + hostId + '…');
+            var conn = peer.connect(hostId, { reliable: true });
+            setupChat(conn);
 
-            conn.on('open', () => {
-                clearTimeout(viewerRetryTimer);
+            conn.on('open', function () {
                 connectedPeers.add(hostId);
                 updateStatus('Connected to Host', 'badge-connected');
-                placeholderText.textContent = 'Waiting for host to share screen...';
-                appendMessage('system', 'Connected! Waiting for host to stream.');
-                // Request stream from host in case host was already sharing
-                conn.send({ type: 'signal', action: 'request_stream' });
+                placeholderText.textContent = 'Waiting for host to share screen…';
+                appendMsg('system', 'Connected! Waiting for the host to share their screen.');
             });
 
-            conn.on('close', () => {
+            conn.on('close', function () {
                 connectedPeers.delete(hostId);
                 updateStatus('Host Disconnected', 'badge-offline');
-                appendMessage('system', 'The host has left the room.');
+                appendMsg('system', 'Host disconnected.');
             });
         });
 
-        // Handle incoming calls (screen stream or host's voice)
-        peer.on('call', handleIncomingCall);
+        peer.on('call', handleCall);
 
-        peer.on('error', (err) => {
-            console.error('Viewer peer error:', err);
-            updateStatus('Connection Error', 'badge-offline');
-            appendMessage('system', `Connection error (${err.type}). Retrying in 5 seconds...`);
-            clearTimeout(viewerRetryTimer);
-            viewerRetryTimer = setTimeout(() => initViewer(hostId), 5000);
+        peer.on('error', function (err) {
+            updateStatus('Error — Retrying…', 'badge-offline');
+            appendMsg('system', 'Connection problem (' + err.type + '), retrying in 6 s…');
+            setTimeout(function () { startViewer(hostId); }, 6000);
         });
+
+        // Auto-retry after 20 s if still not connected
+        setTimeout(function () {
+            if (!connectedPeers.has(hostId)) {
+                appendMsg('system', 'Still connecting — retrying automatically…');
+                startViewer(hostId);
+            }
+        }, 20000);
     }
 
-    // ──────────────────────────────────────────
-    // 3. INCOMING CALL ROUTING (Screen vs Voice)
-    // ──────────────────────────────────────────
-    function handleIncomingCall(call) {
-        const type = (call.metadata && call.metadata.type) || 'screen';
+    // ══════════════════════════════════════════════════════════════════════════
+    // 3. Incoming call handler (screen stream OR voice stream)
+    // ══════════════════════════════════════════════════════════════════════════
+    function handleCall(call) {
+        var type = (call.metadata && call.metadata.type) || 'screen';
 
         if (type === 'voice') {
-            // Answer with our mic stream if we have one, or empty
             call.answer(localMicStream || undefined);
-            call.on('stream', (remoteVoiceStream) => {
-                voiceAudio.srcObject = remoteVoiceStream;
-                voiceAudio.play().catch(e => console.warn('Voice play blocked:', e));
-                appendMessage('system', '🎙️ Friend joined voice chat!');
+            call.on('stream', function (stream) {
+                voiceAudio.srcObject = stream;
+                voiceAudio.play().catch(function () {});
+                appendMsg('system', '🎙️ Voice chat connected.');
             });
         } else {
-            // Answer screen stream
             call.answer();
-            call.on('stream', (remoteStream) => {
-                videoPlayer.srcObject = remoteStream;
-                // Start muted to bypass browser autoplay restrictions
+            call.on('stream', function (stream) {
+                videoPlayer.srcObject = stream;
+                // Start muted to pass browser autoplay policy, then prompt user
                 videoPlayer.muted = true;
-                const playPromise = videoPlayer.play();
-                if (playPromise !== undefined) {
-                    playPromise.then(() => {
-                        placeholder.classList.add('hidden');
-                        updateStatus('Watching Live', 'badge-live');
-                        appendMessage('system', 'Receiving movie screen stream!');
-                        if (unmuteOverlayBtn) unmuteOverlayBtn.classList.remove('hidden');
-                    }).catch(err => {
-                        console.warn('Playback error:', err);
-                        placeholderText.textContent = 'Click to Play Movie';
-                        placeholder.classList.remove('hidden');
-                    });
-                }
+                videoPlayer.play().then(function () {
+                    placeholder.classList.add('hidden');
+                    updateStatus('Watching Live', 'badge-live');
+                    appendMsg('system', '🎬 Receiving stream! Click the video to unmute.');
+                }).catch(function () {
+                    placeholderText.textContent = 'Click here to play';
+                });
             });
         }
     }
 
-    // ──────────────────────────────────────────
-    // 4. TWO-WAY VOICE CHAT (MIC TOGGLE)
-    // ──────────────────────────────────────────
-    micBtn.addEventListener('click', async () => {
-        // If microphone is not yet started, initialize it
-        if (!localMicStream) {
-            try {
-                localMicStream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        echoCancellation: true, // Prevents movie sound from looping
-                        noiseSuppression: true,
-                        autoGainControl: true
-                    },
-                    video: false
-                });
-
-                micTrack = localMicStream.getAudioTracks()[0];
-                micTrack.enabled = true; // Start unmuted
-
-                micBtn.textContent = '🎙️ Mic: On (Talking)';
-                micBtn.classList.remove('btn-secondary');
-                micBtn.classList.add('btn-success');
-                appendMessage('system', 'You joined voice chat. Mic is ON.');
-
-                // Call all connected peers with our mic stream
-                connectedPeers.forEach(peerId => {
-                    peer.call(peerId, localMicStream, { metadata: { type: 'voice' } });
-                });
-
-            } catch (err) {
-                console.error('Mic access denied:', err);
-                alert('Microphone permission was denied or not found.');
-            }
-            return;
+    // Click anywhere on the video to unmute it
+    videoPlayer.addEventListener('click', function () {
+        if (videoPlayer.srcObject && videoPlayer.muted) {
+            videoPlayer.muted = false;
+            videoPlayer.play().catch(function () {});
         }
-
-        // If mic already exists, toggle Mute / Unmute
-        micTrack.enabled = !micTrack.enabled;
-
-        if (micTrack.enabled) {
-            micBtn.textContent = '🎙️ Mic: On (Talking)';
-            micBtn.classList.remove('btn-secondary');
-            micBtn.classList.add('btn-success');
-            appendMessage('system', 'Microphone unmuted.');
-        } else {
-            micBtn.textContent = '🔇 Mic: Muted';
-            micBtn.classList.remove('btn-success');
-            micBtn.classList.add('btn-secondary');
-            appendMessage('system', 'Microphone muted.');
+    });
+    placeholder.addEventListener('click', function () {
+        if (videoPlayer.srcObject) {
+            videoPlayer.muted = false;
+            placeholder.classList.add('hidden');
+            videoPlayer.play().catch(function () {});
         }
     });
 
-    // ──────────────────────────────────────────
-    // 5. REAL-TIME CHAT & STREAM REQUEST SIGNALING
-    // ──────────────────────────────────────────
-    function setupChatConnection(conn) {
-        activeConnections.push(conn);
+    // ══════════════════════════════════════════════════════════════════════════
+    // 4. Microphone (2-way voice chat)
+    // ══════════════════════════════════════════════════════════════════════════
+    micBtn.addEventListener('click', async function () {
+        if (!localMicStream) {
+            try {
+                localMicStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                    video: false
+                });
+                micTrack = localMicStream.getAudioTracks()[0];
+                micTrack.enabled = true;
+                micBtn.textContent = '🎙️ Mic: On (Talking)';
+                micBtn.className = 'btn btn-success';
+                appendMsg('system', 'Mic ON — you are live.');
+                connectedPeers.forEach(function (pid) {
+                    peer.call(pid, localMicStream, { metadata: { type: 'voice' } });
+                });
+            } catch (e) {
+                alert('Microphone permission denied.');
+            }
+            return;
+        }
+        micTrack.enabled = !micTrack.enabled;
+        if (micTrack.enabled) {
+            micBtn.textContent = '🎙️ Mic: On (Talking)';
+            micBtn.className = 'btn btn-success';
+            appendMsg('system', 'Mic unmuted.');
+        } else {
+            micBtn.textContent = '🔇 Mic: Muted';
+            micBtn.className = 'btn btn-secondary';
+            appendMsg('system', 'Mic muted.');
+        }
+    });
 
-        conn.on('data', (data) => {
-            if (data && data.type === 'signal' && data.action === 'request_stream') {
-                if (localStream && isHost) {
-                    peer.call(conn.peer, localStream, { metadata: { type: 'screen' } });
-                }
-                return;
-            }
-            if (data && data.text) {
-                appendMessage('friend', data.text, data.sender || 'Friend');
-            }
+    // ══════════════════════════════════════════════════════════════════════════
+    // 5. Chat
+    // ══════════════════════════════════════════════════════════════════════════
+    function setupChat(conn) {
+        activeConns.push(conn);
+        conn.on('data', function (data) {
+            if (data && data.text) appendMsg('friend', data.text, data.sender || 'Friend');
         });
-
-        conn.on('close', () => {
-            activeConnections = activeConnections.filter(c => c !== conn);
+        conn.on('close', function () {
+            activeConns = activeConns.filter(function (c) { return c !== conn; });
             connectedPeers.delete(conn.peer);
         });
     }
 
-    chatForm.addEventListener('submit', (e) => {
+    chatForm.addEventListener('submit', function (e) {
         e.preventDefault();
-        const text = messageInput.value.trim();
+        var text = messageInput.value.trim();
         if (!text) return;
-
-        appendMessage('me', text, 'You');
+        appendMsg('me', text, 'You');
         messageInput.value = '';
-
-        activeConnections.forEach(conn => {
-            if (conn.open) {
-                conn.send({
-                    text: text,
-                    sender: isHost ? 'Host' : 'Friend'
-                });
-            }
+        activeConns.forEach(function (c) {
+            if (c.open) c.send({ text: text, sender: isHost ? 'Host' : 'Friend' });
         });
     });
 
-    function appendMessage(type, text, author = '') {
-        const li = document.createElement('li');
+    // ══════════════════════════════════════════════════════════════════════════
+    // 6. Player controls
+    // ══════════════════════════════════════════════════════════════════════════
+    speakerBtn.addEventListener('click', function () {
+        videoPlayer.muted = !videoPlayer.muted;
+        speakerBtn.textContent = videoPlayer.muted ? '🔇 Movie Muted' : '🔊 Movie Audio';
+    });
+
+    pauseBtn.addEventListener('click', function () {
+        if (videoPlayer.paused) { videoPlayer.play(); pauseBtn.textContent = 'Pause'; }
+        else { videoPlayer.pause(); pauseBtn.textContent = 'Resume'; }
+    });
+
+    fullscreenBtn.addEventListener('click', function () {
+        var c = document.getElementById('video-container');
+        if (!document.fullscreenElement) c.requestFullscreen().catch(function () {});
+        else document.exitFullscreen();
+    });
+
+    copyLinkBtn.addEventListener('click', function () {
+        shareLinkInput.select();
+        navigator.clipboard.writeText(shareLinkInput.value).then(function () {
+            copyLinkBtn.textContent = 'Copied!';
+            setTimeout(function () { copyLinkBtn.textContent = 'Copy Link'; }, 2000);
+        });
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Helpers
+    // ══════════════════════════════════════════════════════════════════════════
+    function updateStatus(text, cls) {
+        statusBadge.textContent = text;
+        statusBadge.className = 'badge ' + cls;
+    }
+
+    function appendMsg(type, text, author) {
+        var li = document.createElement('li');
         if (type === 'me') {
             li.className = 'msg-me';
-            li.innerHTML = `<span class="msg-author">${escapeHtml(author)}</span>${escapeHtml(text)}`;
+            li.innerHTML = '<span class="msg-author">' + esc(author) + '</span>' + esc(text);
         } else if (type === 'friend') {
             li.className = 'msg-friend';
-            li.innerHTML = `<span class="msg-author">${escapeHtml(author)}</span>${escapeHtml(text)}`;
+            li.innerHTML = '<span class="msg-author">' + esc(author) + '</span>' + esc(text);
         } else {
             li.className = 'system-msg';
             li.textContent = text;
@@ -414,94 +355,10 @@ document.addEventListener('DOMContentLoaded', () => {
         messagesList.scrollTop = messagesList.scrollHeight;
     }
 
-    function escapeHtml(str) {
-        return str.replace(/[&<>"']/g, m => ({
-            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
-        })[m]);
-    }
-
-    // ──────────────────────────────────────────
-    // 6. PLAYER CONTROLS (SPEAKER, PAUSE, FULLSCREEN, UNMUTE)
-    // ──────────────────────────────────────────
-    function unmuteAndPlayMovie() {
-        if (videoPlayer.srcObject) {
-            videoPlayer.muted = false;
-            videoPlayer.play().then(() => {
-                if (unmuteOverlayBtn) unmuteOverlayBtn.classList.add('hidden');
-                placeholder.classList.add('hidden');
-                speakerBtn.textContent = '🔊 Movie Audio';
-            }).catch(e => console.warn('Unmute error:', e));
-        }
-        if (voiceAudio.srcObject && voiceAudio.paused) {
-            voiceAudio.play().catch(e => console.warn('Voice play error:', e));
-        }
-    }
-
-    if (unmuteOverlayBtn) {
-        unmuteOverlayBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            unmuteAndPlayMovie();
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, function (m) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
         });
     }
 
-    if (placeholder) {
-        placeholder.addEventListener('click', () => {
-            unmuteAndPlayMovie();
-        });
-    }
-
-    if (videoContainer) {
-        videoContainer.addEventListener('click', () => {
-            if (videoPlayer.srcObject && videoPlayer.muted) {
-                unmuteAndPlayMovie();
-            }
-        });
-    }
-
-    speakerBtn.addEventListener('click', () => {
-        if (!videoPlayer.srcObject) return;
-        if (videoPlayer.paused) {
-            videoPlayer.play();
-        }
-        videoPlayer.muted = !videoPlayer.muted;
-        speakerBtn.textContent = videoPlayer.muted ? '🔇 Movie Muted' : '🔊 Movie Audio';
-        if (!videoPlayer.muted && unmuteOverlayBtn) {
-            unmuteOverlayBtn.classList.add('hidden');
-        }
-    });
-
-    pauseBtn.addEventListener('click', () => {
-        if (videoPlayer.paused) {
-            videoPlayer.play();
-            pauseBtn.textContent = 'Pause';
-        } else {
-            videoPlayer.pause();
-            pauseBtn.textContent = 'Resume';
-        }
-    });
-
-    fullscreenBtn.addEventListener('click', () => {
-        const container = document.getElementById('video-container');
-        if (!document.fullscreenElement) {
-            container.requestFullscreen().catch(err => {
-                console.error('Fullscreen request failed:', err);
-            });
-        } else {
-            document.exitFullscreen();
-        }
-    });
-
-    // Copy Room Link button
-    copyLinkBtn.addEventListener('click', () => {
-        shareLinkInput.select();
-        navigator.clipboard.writeText(shareLinkInput.value).then(() => {
-            copyLinkBtn.textContent = 'Copied!';
-            setTimeout(() => { copyLinkBtn.textContent = 'Copy Link'; }, 2000);
-        });
-    });
-
-    function updateStatus(text, badgeClass) {
-        statusBadge.textContent = text;
-        statusBadge.className = `badge ${badgeClass}`;
-    }
-});
+}); // end window.load
