@@ -3,35 +3,66 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Movie Watcher</title>
+    <title>Movie Watcher - Live Watch Party</title>
     <link rel="stylesheet" href="styles.css">
+    <!-- PeerJS for WebRTC Peer-to-Peer streaming across the internet -->
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
     <header>
-        <h1>Movie Watcher</h1>
+        <div class="header-content">
+            <h1>🎬 Movie Watcher</h1>
+            <span id="status-badge" class="badge badge-offline">Offline</span>
+        </div>
     </header>
+
     <main>
-        <section id="video-container">
-            <video id="video-player" controls></video>
+        <!-- Left Column: Video & Controls -->
+        <section id="stage">
+            <div id="video-container">
+                <video id="video-player" playsinline autoplay></video>
+                <div id="video-placeholder">
+                    <p id="placeholder-text">Click "Start Screen Share" to begin hosting</p>
+                </div>
+            </div>
+
+            <!-- Share Room Link Box (appears when hosting) -->
+            <div id="share-box" class="share-box hidden">
+                <span class="share-label">🔗 Share this link with your friend:</span>
+                <div class="share-input-group">
+                    <input id="share-link-input" type="text" readonly>
+                    <button id="copy-link-btn">Copy Link</button>
+                </div>
+            </div>
+
+            <!-- Player Controls -->
+            <div id="controls">
+                <button id="screen-share-btn" class="btn btn-primary">Start Screen Share</button>
+                <button id="mute-btn" class="btn btn-secondary">Mute</button>
+                <button id="pause-btn" class="btn btn-secondary">Pause</button>
+                <button id="fullscreen-btn" class="btn btn-secondary">Fullscreen</button>
+            </div>
         </section>
-        <section id="controls">
-            <button id="start-screen-share">Start Screen Share</button>
-            <button id="mute-audio">Mute Audio</button>
-            <button id="pause-play">Pause/Play</button>
-            <select id="video-quality">
-                <option value="1080p">1080p</option>
-                <option value="4K">4K</option>
-            </select>
-        </section>
-        <section id="chat">
-            <ul id="messages"></ul>
-            <input id="message-input" type="text" placeholder="Type a message...">
-            <button id="send-message">Send</button>
+
+        <!-- Right Column: Live Chat -->
+        <section id="chat-section">
+            <div class="chat-header">
+                <h3>💬 Live Chat</h3>
+            </div>
+            <ul id="messages" class="messages-list">
+                <li class="system-msg">Welcome to Movie Watcher! Start sharing or join via room link.</li>
+            </ul>
+            <form id="chat-form" class="chat-form">
+                <input id="message-input" type="text" placeholder="Type a message..." autocomplete="off">
+                <button type="submit" id="send-btn" class="btn btn-primary">Send</button>
+            </form>
         </section>
     </main>
+
     <footer>
-        <p>&copy; 2023 Movie Watcher</p>
+        <p>Movie Watcher &bull; Real-Time P2P WebRTC Streaming</p>
     </footer>
+
     <script src="script.js" defer></script>
 </body>
 </html>
