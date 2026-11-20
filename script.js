@@ -122,33 +122,56 @@ window.addEventListener('load', function () {
         }
     });
 
-    // Helper: Calls peer and enforces movie bitrate & smooth framerate priority
+    // Helper: Calls peer and enforces HD movie bitrate, H.264 hardware acceleration & anti-jitter
     function callPeerWithStream(peerId, stream, type) {
         const call = peer.call(peerId, stream, { metadata: { type: type } });
         if (call && type === 'screen') {
-            const enforceSmoothFramerate = function () {
+            const enforceHighQuality = function () {
                 try {
                     const pc = call.peerConnection;
-                    if (!pc || !pc.getSenders) return;
-                    pc.getSenders().forEach(function (sender) {
-                        if (sender.track && sender.track.kind === 'video') {
-                            const params = sender.getParameters();
-                            if (!params.encodings || params.encodings.length === 0) {
-                                params.encodings = [{}];
+                    if (!pc) return;
+
+                    // Prefer H.264: Uses dedicated hardware chips on phones for 0% CPU stutter
+                    if (pc.getTransceivers && window.RTCRtpSender && RTCRtpSender.getCapabilities) {
+                        pc.getTransceivers().forEach(function (transceiver) {
+                            if (transceiver.sender && transceiver.sender.track && transceiver.sender.track.kind === 'video') {
+                                try {
+                                    const caps = RTCRtpSender.getCapabilities('video');
+                                    if (caps && caps.codecs) {
+                                        const h264 = caps.codecs.filter(function (c) { return c.mimeType.toLowerCase() === 'video/h264'; });
+                                        const others = caps.codecs.filter(function (c) { return c.mimeType.toLowerCase() !== 'video/h264'; });
+                                        if (h264.length > 0 && transceiver.setCodecPreferences) {
+                                            transceiver.setCodecPreferences(h264.concat(others));
+                                        }
+                                    }
+                                } catch (e) {}
                             }
-                            // 2.5 Mbps cap: perfectly streams 1080p/720p 30fps without choking home uploads or VPNs
-                            params.encodings[0].maxBitrate = 2500000;
-                            // Enforce smooth framerate priority: never drop to 5 FPS!
-                            params.degradationPreference = 'maintain-framerate';
-                            sender.setParameters(params).catch(function () {});
-                        }
-                    });
+                        });
+                    }
+
+                    // Enforce 5.5 Mbps HD bitrate & balanced quality
+                    if (pc.getSenders) {
+                        pc.getSenders().forEach(function (sender) {
+                            if (sender.track && sender.track.kind === 'video') {
+                                const params = sender.getParameters();
+                                if (!params.encodings || params.encodings.length === 0) {
+                                    params.encodings = [{}];
+                                }
+                                // 5.5 Mbps: Crystal-clear 1080p picture quality without pixelation
+                                params.encodings[0].maxBitrate = 5500000;
+                                // Balanced: Keeps video crisp and sharp while maintaining steady framerate
+                                params.degradationPreference = 'balanced';
+                                sender.setParameters(params).catch(function () {});
+                            }
+                        });
+                    }
                 } catch (e) {}
             };
-            setTimeout(enforceSmoothFramerate, 500);
-            setTimeout(enforceSmoothFramerate, 1500);
+
+            setTimeout(enforceHighQuality, 300);
+            setTimeout(enforceHighQuality, 1200);
             if (call.peerConnection) {
-                call.peerConnection.addEventListener('connectionstatechange', enforceSmoothFramerate);
+                call.peerConnection.addEventListener('connectionstatechange', enforceHighQuality);
             }
         }
         return call;
@@ -270,6 +293,18 @@ window.addEventListener('load', function () {
             });
         } else {
             call.answer();
+
+            // Anti-Stutter Jitter Buffer: 200ms buffer absorbs momentary network/Wi-Fi delay spikes
+            try {
+                if (call.peerConnection && call.peerConnection.getReceivers) {
+                    call.peerConnection.getReceivers().forEach(function (receiver) {
+                        if (receiver.track && receiver.track.kind === 'video' && 'playoutDelayHint' in receiver) {
+                            receiver.playoutDelayHint = 0.2;
+                        }
+                    });
+                }
+            } catch (e) {}
+
             call.on('stream', function (stream) {
                 videoPlayer.srcObject = stream;
                 // Start muted to pass browser autoplay policy, then prompt user
