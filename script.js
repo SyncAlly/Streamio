@@ -7,6 +7,7 @@ window.addEventListener('load', function () {
     const placeholder    = document.getElementById('video-placeholder');
     const placeholderText= document.getElementById('placeholder-text');
     const statusBadge    = document.getElementById('status-badge');
+    const routeBadge     = document.getElementById('route-badge');
     const screenShareBtn = document.getElementById('screen-share-btn');
     const micBtn         = document.getElementById('mic-btn');
     const speakerBtn     = document.getElementById('speaker-btn');
@@ -82,19 +83,19 @@ window.addEventListener('load', function () {
         if (localStream) { stopShare(); return; }
 
         try {
-            // Optimized for movies: 1080p, 30 FPS (eliminates network bufferbloat across routers/VPN)
+            // Max 1080p, Full 60 FPS (Silky smooth motion on high-refresh phone & laptop screens)
             localStream = await navigator.mediaDevices.getDisplayMedia({
                 video: {
                     cursor: 'always',
                     width: { ideal: 1920, max: 1920 },
                     height: { ideal: 1080, max: 1080 },
-                    frameRate: { ideal: 30, max: 30 }
+                    frameRate: { ideal: 60, max: 60 }
                 },
                 audio: true
             });
 
             // CRITICAL: Tells browser this is a movie/video, NOT a static document
-            // This prevents Chrome from dropping framerate to 2-5 FPS!
+            // This prevents Chrome from dropping framerate!
             const videoTrack = localStream.getVideoTracks()[0];
             if (videoTrack && 'contentHint' in videoTrack) {
                 videoTrack.contentHint = 'motion';
@@ -122,10 +123,11 @@ window.addEventListener('load', function () {
         }
     });
 
-    // Helper: Calls peer and enforces HD movie bitrate, H.264 hardware acceleration & anti-jitter
+    // Helper: Calls peer and enforces Max 1080p graphics, H.264 hardware acceleration, and route monitoring
     function callPeerWithStream(peerId, stream, type) {
         const call = peer.call(peerId, stream, { metadata: { type: type } });
         if (call && type === 'screen') {
+            monitorRoute(call);
             const enforceHighQuality = function () {
                 try {
                     const pc = call.peerConnection;
@@ -149,7 +151,7 @@ window.addEventListener('load', function () {
                         });
                     }
 
-                    // Enforce True 1:1 Source Fidelity: 8 Mbps Bitrate & Zero Downsampling
+                    // Max Graphics: 12 Mbps Bitrate, 60 FPS, Zero Downsampling
                     if (pc.getSenders) {
                         pc.getSenders().forEach(function (sender) {
                             if (sender.track && sender.track.kind === 'video') {
@@ -157,18 +159,27 @@ window.addEventListener('load', function () {
                                 if (!params.encodings || params.encodings.length === 0) {
                                     params.encodings = [{}];
                                 }
-                                // Pristine Bitrate: up to 8 Mbps allows full 720p/1080p source clarity with zero compression blur
-                                params.encodings[0].maxBitrate = 8000000;
-                                // Strictly 1:1 pixel mapping: forbids browser from downscaling the physical resolution
+                                // Max 12 Mbps: Pristine Blu-ray / source clarity with zero compression blur
+                                params.encodings[0].maxBitrate = 12000000;
+                                // Strictly 1:1 pixel mapping: forbids browser from downscaling
                                 params.encodings[0].scaleResolutionDownBy = 1.0;
-                                // Strict Resolution Lock: preserves 100% of original source sharpness on larger laptop/monitor screens
-                                params.degradationPreference = 'maintain-resolution';
+                                // Smooth framerate: keeps 60 FPS buttery smooth
+                                params.degradationPreference = 'maintain-framerate';
                                 sender.setParameters(params).catch(function () {});
                             }
                         });
                     }
                 } catch (e) {}
             };
+
+            setTimeout(enforceHighQuality, 300);
+            setTimeout(enforceHighQuality, 1200);
+            if (call.peerConnection) {
+                call.peerConnection.addEventListener('connectionstatechange', enforceHighQuality);
+            }
+        }
+        return call;
+    }
 
             setTimeout(enforceHighQuality, 300);
             setTimeout(enforceHighQuality, 1200);
@@ -226,6 +237,7 @@ window.addEventListener('load', function () {
         screenShareBtn.textContent = 'Start Screen Share';
         screenShareBtn.className = 'btn btn-primary';
         shareBox.classList.add('hidden');
+        if (routeBadge) routeBadge.classList.add('hidden');
         updateStatus('Ready to Host', 'badge-offline');
         appendMsg('system', 'You stopped sharing.');
     }
@@ -295,13 +307,14 @@ window.addEventListener('load', function () {
             });
         } else {
             call.answer();
+            monitorRoute(call);
 
-            // Anti-Stutter Jitter Buffer: 200ms buffer absorbs momentary network/Wi-Fi delay spikes
+            // Responsive Jitter Buffer: 50ms buffer for ultra-fluid 60 FPS motion without sluggish lag
             try {
                 if (call.peerConnection && call.peerConnection.getReceivers) {
                     call.peerConnection.getReceivers().forEach(function (receiver) {
                         if (receiver.track && receiver.track.kind === 'video' && 'playoutDelayHint' in receiver) {
-                            receiver.playoutDelayHint = 0.2;
+                            receiver.playoutDelayHint = 0.05;
                         }
                     });
                 }
@@ -446,6 +459,75 @@ window.addEventListener('load', function () {
         }
         messagesList.appendChild(li);
         messagesList.scrollTop = messagesList.scrollHeight;
+    }
+
+    // ── Live WebRTC Route Inspector (Tailscale vs Cloud vs LAN) ─────────────
+    function monitorRoute(call) {
+        if (!call || !call.peerConnection) return;
+        const pc = call.peerConnection;
+        let lastReportedRoute = '';
+
+        const checkRoute = async function () {
+            if (!pc || pc.connectionState === 'closed') return;
+            try {
+                const stats = await pc.getStats();
+                let selectedPair = null;
+                stats.forEach(function (report) {
+                    if (report.type === 'transport' && report.selectedCandidatePairId) {
+                        selectedPair = stats.get(report.selectedCandidatePairId);
+                    } else if (report.type === 'candidate-pair' && (report.selected || report.nominated)) {
+                        selectedPair = report;
+                    }
+                });
+                if (selectedPair) {
+                    const local = stats.get(selectedPair.localCandidateId);
+                    const remote = stats.get(selectedPair.remoteCandidateId);
+                    const localIp = (local && (local.address || local.ip)) || '';
+                    const remoteIp = (remote && (remote.address || remote.ip)) || '';
+                    const localType = (local && local.candidateType) || '';
+                    const remoteType = (remote && remote.candidateType) || '';
+
+                    let label = '';
+                    let badgeClass = '';
+
+                    // Check if either endpoint is using a Tailscale 100.x.x.x private IP
+                    if (localIp.startsWith('100.') || remoteIp.startsWith('100.')) {
+                        label = '⚡ Tailscale Direct (100.x) • 0 MB Cloud';
+                        badgeClass = 'badge-tailscale';
+                    } else if (localType === 'relay' || remoteType === 'relay') {
+                        label = '☁️ Cloud Relay (Metered)';
+                        badgeClass = 'badge-relay';
+                    } else if (localIp.startsWith('192.168.') || remoteIp.startsWith('192.168.') || localIp.startsWith('10.') || localIp.startsWith('172.')) {
+                        label = '🏠 Local Wi-Fi (LAN)';
+                        badgeClass = 'badge-connected';
+                    } else {
+                        label = '🌐 Direct Internet (STUN)';
+                        badgeClass = 'badge-connected';
+                    }
+
+                    if (label !== lastReportedRoute) {
+                        lastReportedRoute = label;
+                        updateRouteBadge(label, badgeClass);
+                        appendMsg('system', '⚡ Active Route: ' + label);
+                    }
+                }
+            } catch (e) {}
+        };
+
+        const interval = setInterval(checkRoute, 2500);
+        setTimeout(checkRoute, 1200);
+        setTimeout(checkRoute, 3500);
+        pc.addEventListener('connectionstatechange', function () {
+            if (pc.connectionState === 'closed') clearInterval(interval);
+            else checkRoute();
+        });
+    }
+
+    function updateRouteBadge(text, cls) {
+        if (!routeBadge) return;
+        routeBadge.textContent = text;
+        routeBadge.className = 'badge ' + cls;
+        routeBadge.classList.remove('hidden');
     }
 
     function esc(s) {
