@@ -62,6 +62,31 @@ window.addEventListener('load', function () {
     let isHost           = false;
     let roomId           = null;
 
+    // ── Force Tailscale: unmask mDNS .local → real Tailscale IP on host ───────
+    // Chrome hides private IPs (100.x, 192.168.x) behind anonymous .local names.
+    // This patch intercepts WebRTC SDP on the host and replaces the anonymous
+    // .local alias with the real Tailscale IP (100.109.86.125) so the phone
+    // can reach the PC directly across different Wi-Fi networks via Tailscale.
+    const TAILSCALE_HOST_IP = '100.109.86.125';
+    const MDNS_LOCAL_RE = /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.local/gi;
+
+    (function patchRTCForTailscale() {
+        if (typeof RTCPeerConnection === 'undefined') return;
+
+        var _origSetLocal = RTCPeerConnection.prototype.setLocalDescription;
+        RTCPeerConnection.prototype.setLocalDescription = function (desc) {
+            // Only rewrite on the HOST side when SDP has .local mDNS candidates
+            if (isHost && desc && typeof desc.sdp === 'string' && MDNS_LOCAL_RE.test(desc.sdp)) {
+                MDNS_LOCAL_RE.lastIndex = 0;
+                var mungedSdp = desc.sdp.replace(MDNS_LOCAL_RE, TAILSCALE_HOST_IP);
+                // Create a plain object — RTCSessionDescription.sdp is readonly
+                desc = { type: desc.type, sdp: mungedSdp };
+            }
+            MDNS_LOCAL_RE.lastIndex = 0;
+            return _origSetLocal.apply(this, [desc]);
+        };
+    })();
+
     // ── Detect room ID from URL (?room=... OR #mw-... OR path) ────────────────
     const params   = new URLSearchParams(window.location.search);
     const fromQuery = params.get('room') || '';
