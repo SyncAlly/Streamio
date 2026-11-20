@@ -200,11 +200,19 @@ window.addEventListener('load', function () {
 
             shareLinkInput.value = shareUrl;
             shareBox.classList.remove('hidden');
-            appendMsg('system', 'Room ready! Share the link above with your friend.');
+            shareBox.style.display = 'flex';
+            if (routeBadge) {
+                routeBadge.textContent = '⚡ Route: Waiting for friend…';
+                routeBadge.className = 'badge badge-route';
+                routeBadge.classList.remove('hidden');
+                routeBadge.style.display = 'inline-block';
+            }
+            appendMsg('system', 'Room ready! Share the link below with your friend.');
         });
 
         peer.on('connection', function (conn) {
             setupChat(conn);
+            monitorRoute(conn);
             conn.on('open', function () {
                 connectedPeers.add(conn.peer);
                 appendMsg('system', 'Your friend joined!');
@@ -216,7 +224,7 @@ window.addEventListener('load', function () {
 
         peer.on('call', handleCall);
         peer.on('error', function (err) {
-            appendMsg('system', 'Host error: ' + err.type);
+            appendMsg('system', 'Host notice: ' + (err.message || err.type));
         });
     }
 
@@ -228,7 +236,11 @@ window.addEventListener('load', function () {
         screenShareBtn.textContent = 'Start Screen Share';
         screenShareBtn.className = 'btn btn-primary';
         shareBox.classList.add('hidden');
-        if (routeBadge) routeBadge.classList.add('hidden');
+        shareBox.style.display = 'none';
+        if (routeBadge) {
+            routeBadge.classList.add('hidden');
+            routeBadge.style.display = 'none';
+        }
         updateStatus('Ready to Host', 'badge-offline');
         appendMsg('system', 'You stopped sharing.');
     }
@@ -241,6 +253,12 @@ window.addEventListener('load', function () {
         screenShareBtn.style.display = 'none';
         placeholderText.textContent = 'Connecting to host…';
         updateStatus('Connecting…', 'badge-offline');
+        if (routeBadge) {
+            routeBadge.textContent = '⚡ Route: Connecting…';
+            routeBadge.className = 'badge badge-route';
+            routeBadge.classList.remove('hidden');
+            routeBadge.style.display = 'inline-block';
+        }
 
         // Destroy any old peer cleanly
         if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
@@ -251,6 +269,7 @@ window.addEventListener('load', function () {
             appendMsg('system', 'Connecting to room ' + hostId + '…');
             var conn = peer.connect(hostId, { reliable: true });
             setupChat(conn);
+            monitorRoute(conn);
 
             conn.on('open', function () {
                 connectedPeers.add(hostId);
@@ -421,9 +440,16 @@ window.addEventListener('load', function () {
     });
 
     copyLinkBtn.addEventListener('click', function () {
+        if (!shareLinkInput.value) return;
         shareLinkInput.select();
         navigator.clipboard.writeText(shareLinkInput.value).then(function () {
             copyLinkBtn.textContent = 'Copied!';
+            setTimeout(function () { copyLinkBtn.textContent = 'Copy Link'; }, 2000);
+        }).catch(function () {
+            try {
+                document.execCommand('copy');
+                copyLinkBtn.textContent = 'Copied!';
+            } catch (e) {}
             setTimeout(function () { copyLinkBtn.textContent = 'Copy Link'; }, 2000);
         });
     });
@@ -453,9 +479,11 @@ window.addEventListener('load', function () {
     }
 
     // ── Live WebRTC Route Inspector (Tailscale vs Cloud vs LAN) ─────────────
-    function monitorRoute(call) {
-        if (!call || !call.peerConnection) return;
-        const pc = call.peerConnection;
+    // Inspects connection to verify if using Tailscale (100.x), Cloud Relay, or LAN
+    function monitorRoute(connectionObj) {
+        if (!connectionObj) return;
+        const pc = connectionObj.peerConnection;
+        if (!pc) return;
         let lastReportedRoute = '';
 
         const checkRoute = async function () {
@@ -471,10 +499,10 @@ window.addEventListener('load', function () {
                     }
                 });
                 if (selectedPair) {
-                    const local = stats.get(selectedPair.localCandidateId);
-                    const remote = stats.get(selectedPair.remoteCandidateId);
-                    const localIp = (local && (local.address || local.ip)) || '';
-                    const remoteIp = (remote && (remote.address || remote.ip)) || '';
+                    const local = selectedPair.localCandidateId ? stats.get(selectedPair.localCandidateId) : null;
+                    const remote = selectedPair.remoteCandidateId ? stats.get(selectedPair.remoteCandidateId) : null;
+                    const localIp = (local && (local.address || local.ip || local.relatedAddress)) || '';
+                    const remoteIp = (remote && (remote.address || remote.ip || remote.relatedAddress)) || '';
                     const localType = (local && local.candidateType) || '';
                     const remoteType = (remote && remote.candidateType) || '';
 
@@ -496,7 +524,7 @@ window.addEventListener('load', function () {
                         badgeClass = 'badge-connected';
                     }
 
-                    if (label !== lastReportedRoute) {
+                    if (label && label !== lastReportedRoute) {
                         lastReportedRoute = label;
                         updateRouteBadge(label, badgeClass);
                         appendMsg('system', '⚡ Active Route: ' + label);
@@ -506,8 +534,8 @@ window.addEventListener('load', function () {
         };
 
         const interval = setInterval(checkRoute, 2500);
-        setTimeout(checkRoute, 1200);
-        setTimeout(checkRoute, 3500);
+        setTimeout(checkRoute, 1000);
+        setTimeout(checkRoute, 3000);
         pc.addEventListener('connectionstatechange', function () {
             if (pc.connectionState === 'closed') clearInterval(interval);
             else checkRoute();
@@ -519,6 +547,7 @@ window.addEventListener('load', function () {
         routeBadge.textContent = text;
         routeBadge.className = 'badge ' + cls;
         routeBadge.classList.remove('hidden');
+        routeBadge.style.display = 'inline-block';
     }
 
     function esc(s) {

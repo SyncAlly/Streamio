@@ -241,6 +241,10 @@ main {
     font-size: 0.9rem;
 }
 
+.share-input-group button {
+    white-space: nowrap;
+}
+
 /* Controls */
 #controls {
     display: flex;

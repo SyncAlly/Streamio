@@ -34,15 +34,6 @@
             <!-- Hidden Audio Element for Friend's Microphone Voice -->
             <audio id="voice-audio" autoplay></audio>
 
-            <!-- Share Room Link Box (appears when hosting) -->
-            <div id="share-box" class="share-box hidden">
-                <span class="share-label">🔗 Share this link with your friend:</span>
-                <div class="share-input-group">
-                    <input id="share-link-input" type="text" readonly>
-                    <button id="copy-link-btn">Copy Link</button>
-                </div>
-            </div>
-
             <!-- Player Controls -->
             <div id="controls">
                 <button id="screen-share-btn" class="btn btn-primary">Start Screen Share</button>
@@ -52,6 +43,15 @@
                 <button id="speaker-btn" class="btn btn-secondary">🔊 Movie Audio</button>
                 <button id="pause-btn" class="btn btn-secondary">Pause</button>
                 <button id="fullscreen-btn" class="btn btn-secondary">Fullscreen</button>
+            </div>
+
+            <!-- Share Room Link Box (below start/stop screen share button) -->
+            <div id="share-box" class="share-box hidden">
+                <span class="share-label">🔗 Share this link with your friend:</span>
+                <div class="share-input-group">
+                    <input id="share-link-input" type="text" readonly onclick="this.select()">
+                    <button id="copy-link-btn" class="btn btn-primary">Copy Link</button>
+                </div>
             </div>
         </section>
 
