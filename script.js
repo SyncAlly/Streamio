@@ -19,17 +19,34 @@ window.addEventListener('load', function () {
     const messageInput   = document.getElementById('message-input');
     const messagesList   = document.getElementById('messages');
 
-    // ── STUN Server list for Direct P2P NAT Traversal ─────────────────────────
-    // Fast, resilient multi-region STUN servers
+    // ── High-Speed STUN + Global Authenticated TURN Relay ─────────────────────
+    // Guaranteed WebRTC connection across all networks, VPNs, mobile cellular, and firewalls
     const PEER_OPTIONS = {
         config: {
             iceServers: [
+                // Fast Google & Cloudflare STUN
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' },
-                { urls: 'stun:stun.cloudflare.com:3478' }
+                { urls: 'stun:stun.cloudflare.com:3478' },
+                { urls: 'stun:global.relay.metered.ca:80' },
+                // Metered Global TURN Relay (UDP)
+                {
+                    urls: 'turn:global.relay.metered.ca:80',
+                    username: '82aad90822871c83531a3ced',
+                    credential: '79aMgXZS4xge8k0H'
+                },
+                // Metered Global TURN Relay (TCP - punches through home routers and NAT)
+                {
+                    urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+                    username: '82aad90822871c83531a3ced',
+                    credential: '79aMgXZS4xge8k0H'
+                },
+                // Metered Global TURNS Relay (TLS 443 - punches through all VPNs & mobile carriers)
+                {
+                    urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+                    username: '82aad90822871c83531a3ced',
+                    credential: '79aMgXZS4xge8k0H'
+                }
             ]
         }
     };
