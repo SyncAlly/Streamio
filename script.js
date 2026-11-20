@@ -181,15 +181,6 @@ window.addEventListener('load', function () {
         return call;
     }
 
-            setTimeout(enforceHighQuality, 300);
-            setTimeout(enforceHighQuality, 1200);
-            if (call.peerConnection) {
-                call.peerConnection.addEventListener('connectionstatechange', enforceHighQuality);
-            }
-        }
-        return call;
-    }
-
     function startHost() {
         isHost = true;
         const hostId = 'mw-' + Math.random().toString(36).substring(2, 8);
