@@ -146,6 +146,9 @@ document.addEventListener('DOMContentLoaded', () => {
             shareLinkInput.value = shareUrl;
             shareBox.classList.remove('hidden');
 
+            // Also update browser address bar so copying from either the box or the address bar works!
+            try { window.history.replaceState(null, '', shareUrl); } catch(e) {}
+
             appendMessage('system', `Room created! Send the link above to your friend.`);
         });
 
@@ -191,6 +194,8 @@ document.addEventListener('DOMContentLoaded', () => {
         screenShareBtn.classList.remove('btn-danger');
         screenShareBtn.classList.add('btn-primary');
         updateStatus('Ready to Host', 'badge-offline');
+        shareBox.classList.add('hidden');
+        try { window.history.replaceState(null, '', window.location.pathname); } catch(e) {}
         appendMessage('system', 'You stopped screen sharing.');
     }
 
