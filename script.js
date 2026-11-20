@@ -82,10 +82,23 @@ window.addEventListener('load', function () {
         if (localStream) { stopShare(); return; }
 
         try {
+            // Optimized for movies: 1080p, 30 FPS (eliminates network bufferbloat across routers/VPN)
             localStream = await navigator.mediaDevices.getDisplayMedia({
-                video: { cursor: 'always', frameRate: { ideal: 60, max: 60 } },
+                video: {
+                    cursor: 'always',
+                    width: { ideal: 1920, max: 1920 },
+                    height: { ideal: 1080, max: 1080 },
+                    frameRate: { ideal: 30, max: 30 }
+                },
                 audio: true
             });
+
+            // CRITICAL: Tells browser this is a movie/video, NOT a static document
+            // This prevents Chrome from dropping framerate to 2-5 FPS!
+            const videoTrack = localStream.getVideoTracks()[0];
+            if (videoTrack && 'contentHint' in videoTrack) {
+                videoTrack.contentHint = 'motion';
+            }
         } catch (e) {
             appendMsg('system', 'Screen sharing was cancelled or denied.');
             return;
@@ -104,10 +117,42 @@ window.addEventListener('load', function () {
             startHost();
         } else {
             connectedPeers.forEach(function (pid) {
-                peer.call(pid, localStream, { metadata: { type: 'screen' } });
+                callPeerWithStream(pid, localStream, 'screen');
             });
         }
     });
+
+    // Helper: Calls peer and enforces movie bitrate & smooth framerate priority
+    function callPeerWithStream(peerId, stream, type) {
+        const call = peer.call(peerId, stream, { metadata: { type: type } });
+        if (call && type === 'screen') {
+            const enforceSmoothFramerate = function () {
+                try {
+                    const pc = call.peerConnection;
+                    if (!pc || !pc.getSenders) return;
+                    pc.getSenders().forEach(function (sender) {
+                        if (sender.track && sender.track.kind === 'video') {
+                            const params = sender.getParameters();
+                            if (!params.encodings || params.encodings.length === 0) {
+                                params.encodings = [{}];
+                            }
+                            // 2.5 Mbps cap: perfectly streams 1080p/720p 30fps without choking home uploads or VPNs
+                            params.encodings[0].maxBitrate = 2500000;
+                            // Enforce smooth framerate priority: never drop to 5 FPS!
+                            params.degradationPreference = 'maintain-framerate';
+                            sender.setParameters(params).catch(function () {});
+                        }
+                    });
+                } catch (e) {}
+            };
+            setTimeout(enforceSmoothFramerate, 500);
+            setTimeout(enforceSmoothFramerate, 1500);
+            if (call.peerConnection) {
+                call.peerConnection.addEventListener('connectionstatechange', enforceSmoothFramerate);
+            }
+        }
+        return call;
+    }
 
     function startHost() {
         isHost = true;
@@ -137,8 +182,8 @@ window.addEventListener('load', function () {
                 connectedPeers.add(conn.peer);
                 appendMsg('system', 'Your friend joined!');
                 updateStatus('Live • Friend Connected', 'badge-connected');
-                if (localStream) peer.call(conn.peer, localStream, { metadata: { type: 'screen' } });
-                if (localMicStream) peer.call(conn.peer, localMicStream, { metadata: { type: 'voice' } });
+                if (localStream) callPeerWithStream(conn.peer, localStream, 'screen');
+                if (localMicStream) callPeerWithStream(conn.peer, localMicStream, 'voice');
             });
         });
 
