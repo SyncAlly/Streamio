@@ -19,16 +19,35 @@ document.addEventListener('DOMContentLoaded', () => {
     const messageInput = document.getElementById('message-input');
     const messagesList = document.getElementById('messages');
 
-    // Robust STUN servers for WebRTC NAT traversal across different networks
+    // STUN + TURN for reliable NAT traversal across home/mobile networks.
+    // TURN relay (openrelay.metered.ca) is a free public relay server used as fallback
+    // when both sides are behind strict firewalls/NAT and direct peer-to-peer fails.
     const PEER_CONFIG = {
         config: {
             iceServers: [
+                // STUN: discovers public IP
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' },
-                { urls: 'stun:stun.cloudflare.com:3478' }
+                { urls: 'stun:stun.cloudflare.com:3478' },
+                { urls: 'stun:openrelay.metered.ca:80' },
+                // TURN UDP — relay traffic when direct P2P fails
+                {
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                // TURN TCP — works through most restrictive firewalls
+                {
+                    urls: 'turn:openrelay.metered.ca:80?transport=tcp',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                // TURNS over TLS port 443 — bypasses corporate firewalls
+                {
+                    urls: 'turns:openrelay.metered.ca:443',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
             ]
         }
     };
