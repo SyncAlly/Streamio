@@ -1,8 +1,0 @@
-async function startScreenShare() {
-    try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        videoPlayer.srcObject = stream;
-    } catch (error) {
-        console.error('Error starting screen share:', error);
-    }
-}
