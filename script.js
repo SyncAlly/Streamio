@@ -1,9 +1,11 @@
 document.addEventListener('DOMContentLoaded', () => {
     // DOM Elements
+    const videoContainer = document.getElementById('video-container');
     const videoPlayer = document.getElementById('video-player');
     const voiceAudio = document.getElementById('voice-audio');
     const placeholder = document.getElementById('video-placeholder');
     const placeholderText = document.getElementById('placeholder-text');
+    const unmuteOverlayBtn = document.getElementById('unmute-overlay-btn');
     const statusBadge = document.getElementById('status-badge');
     const screenShareBtn = document.getElementById('screen-share-btn');
     const micBtn = document.getElementById('mic-btn');
@@ -16,6 +18,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatForm = document.getElementById('chat-form');
     const messageInput = document.getElementById('message-input');
     const messagesList = document.getElementById('messages');
+
+    // Robust STUN servers for WebRTC NAT traversal across different networks
+    const PEER_CONFIG = {
+        config: {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' },
+                { urls: 'stun:stun.cloudflare.com:3478' }
+            ]
+        }
+    };
 
     // State
     let peer = null;
@@ -90,7 +106,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function initHost() {
         isHost = true;
         const hostRoomId = 'mw-' + Math.random().toString(36).substring(2, 8);
-        peer = new Peer(hostRoomId);
+        peer = new Peer(hostRoomId, PEER_CONFIG);
 
         updateStatus('Creating Room...', 'badge-offline');
 
@@ -163,7 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ──────────────────────────────────────────
     function initViewer(hostId) {
         isHost = false;
-        peer = new Peer();
+        peer = new Peer(PEER_CONFIG);
 
         screenShareBtn.style.display = 'none'; // Viewer doesn't host screen
         placeholderText.textContent = 'Connecting to host...';
@@ -180,6 +196,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateStatus('Connected to Host', 'badge-connected');
                 placeholderText.textContent = 'Waiting for host to share screen...';
                 appendMessage('system', 'Connected! Waiting for host to stream.');
+                // Request stream from host in case host was already sharing
+                conn.send({ type: 'signal', action: 'request_stream' });
             });
 
             conn.on('close', () => {
@@ -218,14 +236,21 @@ document.addEventListener('DOMContentLoaded', () => {
             call.answer();
             call.on('stream', (remoteStream) => {
                 videoPlayer.srcObject = remoteStream;
-                videoPlayer.muted = false;
-                videoPlayer.play().catch(() => {
-                    placeholderText.textContent = 'Click to unmute & play';
-                    placeholder.classList.remove('hidden');
-                });
-                placeholder.classList.add('hidden');
-                updateStatus('Watching Live', 'badge-live');
-                appendMessage('system', 'Receiving movie screen stream!');
+                // Start muted to bypass browser autoplay restrictions
+                videoPlayer.muted = true;
+                const playPromise = videoPlayer.play();
+                if (playPromise !== undefined) {
+                    playPromise.then(() => {
+                        placeholder.classList.add('hidden');
+                        updateStatus('Watching Live', 'badge-live');
+                        appendMessage('system', 'Receiving movie screen stream!');
+                        if (unmuteOverlayBtn) unmuteOverlayBtn.classList.remove('hidden');
+                    }).catch(err => {
+                        console.warn('Playback error:', err);
+                        placeholderText.textContent = 'Click to Play Movie';
+                        placeholder.classList.remove('hidden');
+                    });
+                }
             });
         }
     }
@@ -283,12 +308,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ──────────────────────────────────────────
-    // 5. REAL-TIME CHAT
+    // 5. REAL-TIME CHAT & STREAM REQUEST SIGNALING
     // ──────────────────────────────────────────
     function setupChatConnection(conn) {
         activeConnections.push(conn);
 
         conn.on('data', (data) => {
+            if (data && data.type === 'signal' && data.action === 'request_stream') {
+                if (localStream && isHost) {
+                    peer.call(conn.peer, localStream, { metadata: { type: 'screen' } });
+                }
+                return;
+            }
             if (data && data.text) {
                 appendMessage('friend', data.text, data.sender || 'Friend');
             }
@@ -341,11 +372,53 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ──────────────────────────────────────────
-    // 6. PLAYER CONTROLS (SPEAKER, PAUSE, FULLSCREEN)
+    // 6. PLAYER CONTROLS (SPEAKER, PAUSE, FULLSCREEN, UNMUTE)
     // ──────────────────────────────────────────
+    function unmuteAndPlayMovie() {
+        if (videoPlayer.srcObject) {
+            videoPlayer.muted = false;
+            videoPlayer.play().then(() => {
+                if (unmuteOverlayBtn) unmuteOverlayBtn.classList.add('hidden');
+                placeholder.classList.add('hidden');
+                speakerBtn.textContent = '🔊 Movie Audio';
+            }).catch(e => console.warn('Unmute error:', e));
+        }
+        if (voiceAudio.srcObject && voiceAudio.paused) {
+            voiceAudio.play().catch(e => console.warn('Voice play error:', e));
+        }
+    }
+
+    if (unmuteOverlayBtn) {
+        unmuteOverlayBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            unmuteAndPlayMovie();
+        });
+    }
+
+    if (placeholder) {
+        placeholder.addEventListener('click', () => {
+            unmuteAndPlayMovie();
+        });
+    }
+
+    if (videoContainer) {
+        videoContainer.addEventListener('click', () => {
+            if (videoPlayer.srcObject && videoPlayer.muted) {
+                unmuteAndPlayMovie();
+            }
+        });
+    }
+
     speakerBtn.addEventListener('click', () => {
+        if (!videoPlayer.srcObject) return;
+        if (videoPlayer.paused) {
+            videoPlayer.play();
+        }
         videoPlayer.muted = !videoPlayer.muted;
         speakerBtn.textContent = videoPlayer.muted ? '🔇 Movie Muted' : '🔊 Movie Audio';
+        if (!videoPlayer.muted && unmuteOverlayBtn) {
+            unmuteOverlayBtn.classList.add('hidden');
+        }
     });
 
     pauseBtn.addEventListener('click', () => {

@@ -20,10 +20,12 @@
         <!-- Left Column: Video & Controls -->
         <section id="stage">
             <div id="video-container">
-                <video id="video-player" playsinline autoplay></video>
+                <video id="video-player" playsinline autoplay muted></video>
                 <div id="video-placeholder">
                     <p id="placeholder-text">Click "Start Screen Share" to begin hosting</p>
                 </div>
+                <!-- Interactive Unmute Button Overlay -->
+                <button id="unmute-overlay-btn" class="unmute-overlay hidden">🔊 Click to Unmute Movie</button>
             </div>
 
             <!-- Hidden Audio Element for Friend's Microphone Voice -->

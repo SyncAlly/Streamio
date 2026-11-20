@@ -129,11 +129,47 @@ main {
     color: var(--text-muted);
     font-size: 1.1rem;
     background: radial-gradient(circle, #1e293b 0%, #000 100%);
-    pointer-events: none;
+    cursor: pointer;
+    z-index: 5;
 }
 
 #video-placeholder.hidden {
     display: none;
+}
+
+/* Unmute Overlay Button */
+.unmute-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(30, 41, 59, 0.95);
+    border: 2px solid var(--primary);
+    color: #ffffff;
+    padding: 0.9rem 1.8rem;
+    border-radius: 9999px;
+    font-size: 1.1rem;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.7), 0 0 15px rgba(59, 130, 246, 0.5);
+    z-index: 20;
+    transition: all 0.2s ease-in-out;
+    animation: pulseBtn 2s infinite;
+}
+
+.unmute-overlay:hover {
+    background: var(--primary);
+    transform: translate(-50%, -50%) scale(1.06);
+}
+
+.unmute-overlay.hidden {
+    display: none;
+}
+
+@keyframes pulseBtn {
+    0% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(1.05); }
+    100% { transform: translate(-50%, -50%) scale(1); }
 }
 
 /* Share Box */
