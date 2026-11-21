@@ -87,57 +87,82 @@ window.addEventListener('load', function () {
     const savedName      = (typeof localStorage !== 'undefined') ? (localStorage.getItem('streamio_username') || '') : '';
     let mySenderName     = savedName || 'Friend';
 
-    // ── Tailscale Enforcer: Force Tailscale (100.x) and Block Local Wi-Fi (192.168.x) ──
+    // ── Multi-Network WebRTC Engine (Tailscale + Local Wi-Fi LAN + STUN/TURN) ──
     const TAILSCALE_HOST_IP = '100.109.86.125';
+    let LAN_HOST_IP         = '192.168.100.35';
 
-    (function patchRTCForTailscale() {
+    (function patchRTCForMultiNetwork() {
         if (typeof RTCPeerConnection === 'undefined') return;
 
-        // 1. Intercept addIceCandidate: Drop any 192.168.x LAN candidate & rewrite .local
+        // 1. Intercept addIceCandidate: NEVER drop candidates; expand .local into real IPs
         var _origAdd = RTCPeerConnection.prototype.addIceCandidate;
         RTCPeerConnection.prototype.addIceCandidate = function (candidate) {
             if (candidate && candidate.candidate) {
                 var c = candidate.candidate;
-                // DROP local Wi-Fi candidates so WebRTC is forced to pick Tailscale!
-                if (c.indexOf(' 192.168.') !== -1 || c.indexOf(' 10.') !== -1 || c.indexOf(' 172.16.') !== -1) {
-                    return Promise.resolve();
-                }
-                // Rewrite any mDNS .local to Tailscale IP
+                // If candidate is masked with mDNS .local, try real Tailscale and LAN IPs
                 if (c.indexOf('.local') !== -1) {
-                    c = c.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
+                    var tsStr = c.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
                     try {
-                        candidate = new RTCIceCandidate({
-                            candidate: c,
+                        _origAdd.call(this, new RTCIceCandidate({
+                            candidate: tsStr,
                             sdpMid: candidate.sdpMid,
                             sdpMLineIndex: candidate.sdpMLineIndex
-                        });
-                    } catch (e) {
-                        candidate.candidate = c;
-                    }
+                        })).catch(function () {});
+                    } catch (e) {}
+
+                    var lanStr = c.replace(/[a-f0-9-]+\.local/gi, LAN_HOST_IP).replace(/^candidate:(\S+)/, 'candidate:$1lan');
+                    try {
+                        _origAdd.call(this, new RTCIceCandidate({
+                            candidate: lanStr,
+                            sdpMid: candidate.sdpMid,
+                            sdpMLineIndex: candidate.sdpMLineIndex
+                        })).catch(function () {});
+                    } catch (e) {}
                 }
             }
-            return _origAdd.apply(this, [candidate]);
+            return _origAdd.apply(this, arguments);
         };
 
-        // 2. Intercept setRemoteDescription: Remove 192.168.x candidate lines from SDP
+        // 2. Intercept setRemoteDescription: Preserve ALL candidates (LAN, Tailscale, STUN)
         var _origSetRemote = RTCPeerConnection.prototype.setRemoteDescription;
         RTCPeerConnection.prototype.setRemoteDescription = function (desc) {
             if (desc && typeof desc.sdp === 'string') {
                 var lines = desc.sdp.split('\r\n');
-                var clean = lines.filter(function (l) {
-                    return !(l.startsWith('a=candidate:') && (l.indexOf(' 192.168.') !== -1 || l.indexOf(' 10.') !== -1 || l.indexOf(' 172.16.') !== -1));
-                }).map(function (l) {
+                var expanded = [];
+                for (var i = 0; i < lines.length; i++) {
+                    var l = lines[i];
+                    expanded.push(l);
+                    // If SDP has an mDNS candidate line, also inject Tailscale & LAN IP versions
                     if (l.startsWith('a=candidate:') && l.indexOf('.local') !== -1) {
-                        return l.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
+                        expanded.push(l.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP));
+                        expanded.push(l.replace(/[a-f0-9-]+\.local/gi, LAN_HOST_IP).replace(/^a=candidate:(\S+)/, 'a=candidate:$1lan'));
                     }
-                    return l;
-                });
-                desc = { type: desc.type, sdp: clean.join('\r\n') };
+                }
+                desc = { type: desc.type, sdp: expanded.join('\r\n') };
             }
             return _origSetRemote.apply(this, [desc]);
         };
 
-        // 3. Intercept onicecandidate setter: Host sends 100.109.86.125 instead of 192.168.x / .local
+        // 3. Intercept setLocalDescription: Expand .local candidates on host offer/answer
+        var _origSetLocal = RTCPeerConnection.prototype.setLocalDescription;
+        RTCPeerConnection.prototype.setLocalDescription = function (desc) {
+            if (desc && typeof desc.sdp === 'string') {
+                var lines = desc.sdp.split('\r\n');
+                var expanded = [];
+                for (var i = 0; i < lines.length; i++) {
+                    var l = lines[i];
+                    expanded.push(l);
+                    if (l.startsWith('a=candidate:') && l.indexOf('.local') !== -1) {
+                        expanded.push(l.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP));
+                        expanded.push(l.replace(/[a-f0-9-]+\.local/gi, LAN_HOST_IP).replace(/^a=candidate:(\S+)/, 'a=candidate:$1lan'));
+                    }
+                }
+                desc = { type: desc.type, sdp: expanded.join('\r\n') };
+            }
+            return _origSetLocal.apply(this, [desc]);
+        };
+
+        // 4. Intercept onicecandidate setter: Host advertises Tailscale IP, LAN IP, and STUN
         var descProp = Object.getOwnPropertyDescriptor(RTCPeerConnection.prototype, 'onicecandidate');
         if (descProp && descProp.set) {
             var _origSetOnIce = descProp.set;
@@ -147,22 +172,39 @@ window.addEventListener('load', function () {
                     var wrapped = function (evt) {
                         if (evt && evt.candidate && evt.candidate.candidate) {
                             var str = evt.candidate.candidate;
-                            // On the host: turn any host candidate into a Tailscale 100.109.86.125 candidate
-                            if (isHost && (str.indexOf('typ host') !== -1 || str.indexOf('.local') !== -1)) {
-                                str = str.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
-                                str = str.replace(/ 192\.168\.\d+\.\d+ /g, ' ' + TAILSCALE_HOST_IP + ' ');
+                            // Dynamically update host LAN IP if Chrome reveals a real LAN IP
+                            var lanMatch = str.match(/\b(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)\b/);
+                            if (lanMatch && lanMatch[1]) {
+                                LAN_HOST_IP = lanMatch[1];
+                            }
+
+                            // If Chrome masks host candidate behind .local, emit BOTH Tailscale and LAN candidates!
+                            if (isHost && str.indexOf('.local') !== -1) {
+                                // 1. Tailscale candidate
+                                var tsStr = str.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
                                 try {
-                                    evt = {
+                                    var tsEvt = {
                                         candidate: new RTCIceCandidate({
-                                            candidate: str,
+                                            candidate: tsStr,
                                             sdpMid: evt.candidate.sdpMid,
                                             sdpMLineIndex: evt.candidate.sdpMLineIndex
                                         })
                                     };
+                                    fn.call(this, tsEvt);
                                 } catch (e) {}
-                            }
-                            // Drop remaining 192.168.x candidate so it is never transmitted
-                            if (str.indexOf(' 192.168.') !== -1) {
+
+                                // 2. Local Wi-Fi (LAN) candidate
+                                var lanStr = str.replace(/[a-f0-9-]+\.local/gi, LAN_HOST_IP).replace(/^candidate:(\S+)/, 'candidate:$1lan');
+                                try {
+                                    var lanEvt = {
+                                        candidate: new RTCIceCandidate({
+                                            candidate: lanStr,
+                                            sdpMid: evt.candidate.sdpMid,
+                                            sdpMLineIndex: evt.candidate.sdpMLineIndex
+                                        })
+                                    };
+                                    fn.call(this, lanEvt);
+                                } catch (e) {}
                                 return;
                             }
                         }
@@ -961,8 +1003,7 @@ window.addEventListener('load', function () {
         messagesList.scrollTop = messagesList.scrollHeight;
     }
 
-    // ── Live WebRTC Route Inspector (Tailscale vs Cloud vs LAN) ─────────────
-    // Inspects connection to verify if using Tailscale (100.x), Cloud Relay, or LAN
+    // ── Live WebRTC Route Inspector (Tailscale vs Local Wi-Fi vs Cloud) ────────
     function monitorRoute(connectionObj) {
         if (!connectionObj) return;
         const pc = connectionObj.peerConnection;
@@ -974,13 +1015,34 @@ window.addEventListener('load', function () {
             try {
                 const stats = await pc.getStats();
                 let selectedPair = null;
+                let activeTransport = null;
+
+                // 1. Primary: Look for transport with active selectedCandidatePairId
                 stats.forEach(function (report) {
                     if (report.type === 'transport' && report.selectedCandidatePairId) {
-                        selectedPair = stats.get(report.selectedCandidatePairId);
-                    } else if (report.type === 'candidate-pair' && (report.selected || report.nominated)) {
-                        selectedPair = report;
+                        activeTransport = report;
                     }
                 });
+
+                if (activeTransport && stats.has(activeTransport.selectedCandidatePairId)) {
+                    selectedPair = stats.get(activeTransport.selectedCandidatePairId);
+                }
+
+                // 2. Fallback: Search candidate pairs for active succeeded connection
+                if (!selectedPair) {
+                    stats.forEach(function (report) {
+                        if (report.type === 'candidate-pair') {
+                            if (report.selected === true) {
+                                selectedPair = report;
+                            } else if (!selectedPair && report.state === 'succeeded' && (report.bytesReceived > 0 || report.bytesSent > 0)) {
+                                selectedPair = report;
+                            } else if (!selectedPair && report.state === 'succeeded' && report.nominated) {
+                                selectedPair = report;
+                            }
+                        }
+                    });
+                }
+
                 if (selectedPair) {
                     const local = selectedPair.localCandidateId ? stats.get(selectedPair.localCandidateId) : null;
                     const remote = selectedPair.remoteCandidateId ? stats.get(selectedPair.remoteCandidateId) : null;
@@ -989,27 +1051,44 @@ window.addEventListener('load', function () {
                     const localType = (local && local.candidateType) || '';
                     const remoteType = (remote && remote.candidateType) || '';
 
+                    // Collect all candidate strings and IP fields for thorough inspection
+                    const combined = [
+                        localIp, remoteIp,
+                        local && local.candidate,
+                        remote && remote.candidate
+                    ].filter(Boolean).join(' ');
+
                     let label = '';
                     let badgeClass = '';
                     let toastClass = '';
                     let icon = '⚡';
 
-                    // Check if either endpoint is using a Tailscale 100.x.x.x private IP
-                    if (localIp.startsWith('100.') || remoteIp.startsWith('100.')) {
+                    // Tailscale Detection: 100.x.x.x CGNAT range used by Tailscale
+                    const isTailscale = /\b100\.\d+\.\d+\.\d+\b/.test(combined) || localIp.startsWith('100.') || remoteIp.startsWith('100.');
+
+                    // Local Wi-Fi (LAN) Detection: 192.168.x.x, 10.x.x.x, 172.16-31.x.x
+                    const isLan = /\b(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)\d+\.\d+\b/.test(combined) ||
+                                  localIp.startsWith('192.168.') || remoteIp.startsWith('192.168.') ||
+                                  localIp.startsWith('10.') || remoteIp.startsWith('10.') ||
+                                  localIp.startsWith('172.') || remoteIp.startsWith('172.');
+
+                    const isRelay = localType === 'relay' || remoteType === 'relay' || combined.indexOf(' typ relay') !== -1;
+
+                    if (isTailscale) {
                         label = 'Tailscale Direct (100.x) • 0 MB Cloud';
                         badgeClass = 'badge-tailscale';
                         toastClass = 'toast-tailscale';
                         icon = '⚡';
-                    } else if (localType === 'relay' || remoteType === 'relay') {
+                    } else if (isLan) {
+                        label = 'Local Wi-Fi (LAN) • 0 MB Cloud';
+                        badgeClass = 'badge-connected';
+                        toastClass = 'toast-lan';
+                        icon = '🏠';
+                    } else if (isRelay) {
                         label = 'Cloud Relay (Metered)';
                         badgeClass = 'badge-relay';
                         toastClass = 'toast-relay';
                         icon = '☁️';
-                    } else if (localIp.startsWith('192.168.') || remoteIp.startsWith('192.168.') || localIp.startsWith('10.') || localIp.startsWith('172.')) {
-                        label = 'Local Wi-Fi (LAN)';
-                        badgeClass = 'badge-connected';
-                        toastClass = 'toast-lan';
-                        icon = '🏠';
                     } else {
                         label = 'Direct Internet (STUN)';
                         badgeClass = 'badge-connected';
@@ -1021,7 +1100,6 @@ window.addEventListener('load', function () {
                         lastReportedRoute = label;
                         const fullLabel = icon + ' ' + label;
                         updateRouteBadge(fullLabel, badgeClass);
-                        // Show sleek floating bubble in bottom-left corner without polluting live chat
                         showToast('Connection Type', fullLabel, toastClass, 4500);
                     }
                 }
@@ -1046,6 +1124,7 @@ window.addEventListener('load', function () {
         }
         if (routeIndicator) {
             const isTailscale = cls === 'badge-tailscale' || (text && text.toLowerCase().includes('tailscale'));
+            const isLan = cls === 'badge-connected' && text && text.toLowerCase().includes('lan');
             if (isTailscale) {
                 // Blue globe icon for Tailscale
                 routeIndicator.innerHTML = SVG_GLOBE;
@@ -1054,10 +1133,10 @@ window.addEventListener('load', function () {
                 routeIndicator.classList.remove('hidden');
                 routeIndicator.style.display = 'flex';
             } else if (text) {
-                // Blue house icon for Direct Internet / LAN
+                // Blue house icon for Local Wi-Fi (LAN) or Direct Internet
                 routeIndicator.innerHTML = SVG_HOUSE;
                 routeIndicator.className = 'indicator-circle route-direct';
-                routeIndicator.title = text.toLowerCase().includes('lan') ? 'Local Wi-Fi (LAN)' : 'Direct Internet';
+                routeIndicator.title = isLan ? 'Local Wi-Fi (LAN)' : 'Direct Internet';
                 routeIndicator.classList.remove('hidden');
                 routeIndicator.style.display = 'flex';
             } else {
