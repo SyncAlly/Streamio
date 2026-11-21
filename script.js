@@ -82,6 +82,8 @@ window.addEventListener('load', function () {
     let connectedPeers   = new Set();
     let isHost           = false;
     let roomId           = null;
+    let viewerCounter    = 0;
+    let mySenderName     = 'Friend';
 
     // ── Tailscale Enforcer: Force Tailscale (100.x) and Block Local Wi-Fi (192.168.x) ──
     const TAILSCALE_HOST_IP = '100.109.86.125';
@@ -292,6 +294,8 @@ window.addEventListener('load', function () {
 
     function startHost() {
         isHost = true;
+        mySenderName = 'Host';
+        viewerCounter = 0;
         const hostId = 'mw-' + Math.random().toString(36).substring(2, 8);
         peer = new Peer(hostId, PEER_OPTIONS);
 
@@ -323,6 +327,8 @@ window.addEventListener('load', function () {
             monitorRoute(conn);
             conn.on('open', function () {
                 connectedPeers.add(conn.peer);
+                viewerCounter++;
+                conn.send({ type: 'assign-name', name: 'Friend ' + viewerCounter });
                 updateStatus('Live • Friend Connected', 'badge-connected');
                 if (localStream) callPeerWithStream(conn.peer, localStream, 'screen');
                 if (localMicStream) callPeerWithStream(conn.peer, localMicStream, 'voice');
@@ -497,12 +503,32 @@ window.addEventListener('load', function () {
     });
 
     // ══════════════════════════════════════════════════════════════════════════
-    // 5. Chat
+    // 5. Chat & Multi-User Message Relay
     // ══════════════════════════════════════════════════════════════════════════
     function setupChat(conn) {
         activeConns.push(conn);
         conn.on('data', function (data) {
-            if (data && data.text) appendMsg('friend', data.text, data.sender || 'Friend');
+            if (!data) return;
+
+            // Handle name assignment from host
+            if (data.type === 'assign-name' && data.name) {
+                mySenderName = data.name;
+                return;
+            }
+
+            // Normal chat message
+            if (data.text) {
+                appendMsg('friend', data.text, data.sender || 'Friend');
+
+                // Host acts as the relay hub: broadcast to all other connected peers
+                if (isHost) {
+                    activeConns.forEach(function (c) {
+                        if (c !== conn && c.open) {
+                            c.send(data);
+                        }
+                    });
+                }
+            }
         });
         conn.on('close', function () {
             activeConns = activeConns.filter(function (c) { return c !== conn; });
@@ -516,8 +542,9 @@ window.addEventListener('load', function () {
         if (!text) return;
         appendMsg('me', text, 'You');
         messageInput.value = '';
+        var payload = { text: text, sender: mySenderName || (isHost ? 'Host' : 'Friend') };
         activeConns.forEach(function (c) {
-            if (c.open) c.send({ text: text, sender: isHost ? 'Host' : 'Friend' });
+            if (c.open) c.send(payload);
         });
     });
 
