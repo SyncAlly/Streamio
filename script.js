@@ -233,6 +233,62 @@ window.addEventListener('load', function () {
                 configurable: true
             });
         }
+        // 4. addEventListener backup: intercept 'icecandidate' registered via addEventListener
+        //    (Some browsers / PeerJS versions use this instead of the onicecandidate setter)
+        var _origAddEvt = RTCPeerConnection.prototype.addEventListener;
+        RTCPeerConnection.prototype.addEventListener = function (type, fn, options) {
+            if (type === 'icecandidate' && typeof fn === 'function') {
+                var self = this;
+                var wrappedFn = function (evt) {
+                    if (!evt || !evt.candidate || !evt.candidate.candidate) {
+                        return fn.apply(this, arguments);
+                    }
+                    var str = evt.candidate.candidate;
+                    var sdpMid = evt.candidate.sdpMid;
+                    var sdpIdx = evt.candidate.sdpMLineIndex;
+
+                    var lanMatch = str.match(/\b(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/);
+                    if (lanMatch && lanMatch[1]) { LAN_HOST_IP = lanMatch[1]; }
+
+                    if (isHost && str.indexOf('.local') !== -1) {
+                        try {
+                            // Dispatch Tailscale candidate
+                            var tsEvt = Object.create(evt);
+                            Object.defineProperty(tsEvt, 'candidate', {
+                                value: new RTCIceCandidate({ candidate: resolveMdns(str, TAILSCALE_HOST_IP, 'ts'), sdpMid: sdpMid, sdpMLineIndex: sdpIdx }),
+                                configurable: true
+                            });
+                            fn.call(this, tsEvt);
+                        } catch (e) {}
+                        try {
+                            // Dispatch LAN candidate
+                            var lanEvt = Object.create(evt);
+                            Object.defineProperty(lanEvt, 'candidate', {
+                                value: new RTCIceCandidate({ candidate: resolveMdns(str, LAN_HOST_IP, 'lan'), sdpMid: sdpMid, sdpMLineIndex: sdpIdx }),
+                                configurable: true
+                            });
+                            fn.call(this, lanEvt);
+                        } catch (e) {}
+                        return;
+                    }
+                    return fn.apply(this, arguments);
+                };
+                // Store the wrapper so removeEventListener can match it
+                fn.__iceWrapped = wrappedFn;
+                return _origAddEvt.call(this, type, wrappedFn, options);
+            }
+            return _origAddEvt.apply(this, arguments);
+        };
+
+        // 5. removeEventListener: unwrap back to original to avoid listener leaks
+        var _origRemoveEvt = RTCPeerConnection.prototype.removeEventListener;
+        RTCPeerConnection.prototype.removeEventListener = function (type, fn, options) {
+            if (type === 'icecandidate' && fn && fn.__iceWrapped) {
+                return _origRemoveEvt.call(this, type, fn.__iceWrapped, options);
+            }
+            return _origRemoveEvt.apply(this, arguments);
+        };
+
     })();
 
     // ── Detect room ID from URL (?room=... OR #mw-... OR path) ────────────────
