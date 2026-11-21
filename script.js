@@ -98,6 +98,7 @@ window.addEventListener('load', function () {
     let localStream      = null;   // screen-share stream (host)
     let localMicStream   = null;   // mic stream (both sides)
     let micTrack         = null;
+    let activeVoiceCall  = null;   // current voice call connection (viewer)
     let activeConns      = [];     // data channels for chat
     let connectedPeers   = new Set();
     let isHost           = false;
@@ -105,6 +106,27 @@ window.addEventListener('load', function () {
     let viewerCounter    = 0;
     const savedName      = (typeof localStorage !== 'undefined') ? (localStorage.getItem('streamio_username') || '') : '';
     let mySenderName     = savedName || 'Friend';
+
+    // Helper: Creates a silent audio stream with a disabled track for clean initial full-duplex setup
+    function createSilentAudioStream() {
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return null;
+            const ctx = new AudioCtx();
+            const dest = ctx.createMediaStreamDestination();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            gain.gain.value = 0; // silence
+            osc.connect(gain);
+            gain.connect(dest);
+            osc.start();
+            const track = dest.stream.getAudioTracks()[0];
+            if (track) track.enabled = false;
+            return dest.stream;
+        } catch (e) {
+            return null;
+        }
+    }
 
     // ── Multi-Network WebRTC Engine (Tailscale + Local Wi-Fi LAN + STUN/TURN) ──
     const TAILSCALE_HOST_IP = '100.109.86.125';
@@ -429,6 +451,9 @@ window.addEventListener('load', function () {
     function stopShare() {
         if (localStream) { localStream.getTracks().forEach(function (t) { t.stop(); }); localStream = null; }
         videoPlayer.srcObject = null;
+        document.querySelectorAll('audio[id^="peer-audio-"]').forEach(function (el) {
+            try { el.pause(); el.srcObject = null; el.remove(); } catch (e) {}
+        });
         placeholder.classList.remove('hidden');
         placeholderText.textContent = 'Screen share stopped';
         screenShareBtn.textContent = 'Start Screen Share';
@@ -552,8 +577,22 @@ window.addEventListener('load', function () {
     function addPeerVoiceToMixer(peerId, stream) {
         if (!isHost || !stream) return;
         const ctx = getAudioContext();
+
+        // 1. Play directly out of Host's speakers via dedicated HTMLAudioElement (guarantees audible sound on Host)
+        let peerAudio = document.getElementById('peer-audio-' + peerId);
+        if (!peerAudio) {
+            peerAudio = document.createElement('audio');
+            peerAudio.id = 'peer-audio-' + peerId;
+            peerAudio.autoplay = true;
+            peerAudio.style.display = 'none';
+            document.body.appendChild(peerAudio);
+        }
+        peerAudio.srcObject = stream;
+        peerAudio.play().catch(function () {});
+
         if (!ctx) return;
 
+        // 2. Mix into all OTHER viewers' audio streams (mix-minus: never back to themselves)
         let entry = peerVoiceEntries.get(peerId);
         if (!entry) {
             const dest = ctx.createMediaStreamDestination();
@@ -569,10 +608,6 @@ window.addEventListener('load', function () {
             entry.stream = stream;
             entry.sourceNode = ctx.createMediaStreamSource(stream);
 
-            // 1. Play out of Host's speakers/headphones
-            entry.sourceNode.connect(ctx.destination);
-
-            // 2. Mix into all OTHER viewers' audio streams (mix-minus: never back to themselves)
             peerVoiceEntries.forEach(function (otherEntry, otherId) {
                 if (otherId !== peerId && otherEntry.destinationNode) {
                     try { entry.sourceNode.connect(otherEntry.destinationNode); } catch (e) {}
@@ -583,6 +618,14 @@ window.addEventListener('load', function () {
 
     // Cleans up a peer's audio nodes when they leave
     function removePeerVoiceFromMixer(peerId) {
+        const peerAudio = document.getElementById('peer-audio-' + peerId);
+        if (peerAudio) {
+            try {
+                peerAudio.pause();
+                peerAudio.srcObject = null;
+                peerAudio.remove();
+            } catch (e) {}
+        }
         const entry = peerVoiceEntries.get(peerId);
         if (entry) {
             if (entry.sourceNode) {
@@ -632,8 +675,10 @@ window.addEventListener('load', function () {
                     removePeerVoiceFromMixer(callerId);
                 });
             } else {
-                // Viewer answers with local mic (if already granted) and receives the room mix
-                call.answer(localMicStream || undefined);
+                // Viewer receives voice stream from host
+                activeVoiceCall = call;
+                const silentStream = createSilentAudioStream();
+                call.answer(localMicStream || silentStream || undefined);
                 call.on('stream', function (stream) {
                     voiceAudio.srcObject = stream;
                     voiceAudio.play().catch(function () {});
@@ -702,22 +747,25 @@ window.addEventListener('load', function () {
                 if (isHost) {
                     // Hook host mic into the mixer for all connected viewers
                     hookHostMicToMixer();
-                    // Call any peers not yet connected in voice
-                    connectedPeers.forEach(function (pid) {
-                        const outgoingMix = getOrCreateMixForPeer(pid);
-                        const c = peer.call(pid, outgoingMix, { metadata: { type: 'voice' } });
-                        if (c) {
-                            c.on('stream', function (stream) {
-                                addPeerVoiceToMixer(pid, stream);
-                            });
-                        }
-                    });
                 } else {
-                    // Viewer calls Host with their mic stream
-                    if (roomId) {
-                        const voiceCall = peer.call(roomId, localMicStream, { metadata: { type: 'voice' } });
-                        if (voiceCall) {
-                            voiceCall.on('stream', function (stream) {
+                    // Viewer: replace track on existing voice call
+                    let trackReplaced = false;
+                    if (activeVoiceCall && activeVoiceCall.peerConnection) {
+                        try {
+                            const senders = activeVoiceCall.peerConnection.getSenders();
+                            senders.forEach(function (sender) {
+                                if (sender.track && sender.track.kind === 'audio') {
+                                    sender.replaceTrack(micTrack);
+                                    trackReplaced = true;
+                                }
+                            });
+                        } catch (e) {}
+                    }
+                    // Fallback only if no active voice call was open yet
+                    if (!trackReplaced && roomId) {
+                        activeVoiceCall = peer.call(roomId, localMicStream, { metadata: { type: 'voice' } });
+                        if (activeVoiceCall) {
+                            activeVoiceCall.on('stream', function (stream) {
                                 voiceAudio.srcObject = stream;
                                 voiceAudio.play().catch(function () {});
                             });
