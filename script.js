@@ -107,7 +107,6 @@ window.addEventListener('load', function () {
     let mySenderName     = savedName || 'Friend';
 
     // ── Multi-Network WebRTC Engine (Tailscale + Local Wi-Fi LAN + STUN/TURN) ──
-    // Host IP constants (viewer side will use these to resolve mDNS .local addresses)
     const TAILSCALE_HOST_IP = '100.109.86.125';
     let LAN_HOST_IP         = '192.168.100.35';
 
@@ -116,20 +115,18 @@ window.addEventListener('load', function () {
 
         // Helper: build a resolved ICE candidate string from a .local candidate
         function resolveMdns(str, realIp, suffix) {
-            var resolved = str.replace(/[a-f0-9-]{8,}\.local/gi, realIp);
+            var resolved = str.replace(/\S+\.local/gi, realIp);
             if (suffix) {
-                // Give it a unique foundation ID so browsers treat it as a separate candidate
                 resolved = resolved.replace(/^(candidate:\S+)/, '$1' + suffix);
             }
             return resolved;
         }
 
-        // 1. addIceCandidate: when viewer receives a .local candidate from host,
-        //    inject both real IP versions (Tailscale + LAN). Drop the .local original
-        //    since the viewer's browser cannot resolve it.
+        // 1. addIceCandidate: ONLY on viewer when viewer receives a .local candidate from host.
+        //    Host must NEVER overwrite the viewer's candidates with its own IP!
         var _origAdd = RTCPeerConnection.prototype.addIceCandidate;
         RTCPeerConnection.prototype.addIceCandidate = function (candidate) {
-            if (candidate && candidate.candidate && candidate.candidate.indexOf('.local') !== -1) {
+            if (!isHost && candidate && candidate.candidate && candidate.candidate.indexOf('.local') !== -1) {
                 var c = candidate.candidate;
                 var sdpMid = candidate.sdpMid;
                 var sdpIdx = candidate.sdpMLineIndex;
@@ -150,26 +147,24 @@ window.addEventListener('load', function () {
                     })).catch(function () {});
                 } catch (e) {}
 
-                // Drop the unresolvable .local — don't pass through
-                return Promise.resolve();
+                return _origAdd.apply(this, arguments).catch(function () {});
             }
             return _origAdd.apply(this, arguments);
         };
 
-        // 2. setRemoteDescription: expand any .local candidates in SDP
+        // 2. setRemoteDescription: ONLY on viewer when receiving host SDP with .local.
+        //    Host must NEVER overwrite the viewer's remote description SDP!
         var _origSetRemote = RTCPeerConnection.prototype.setRemoteDescription;
         RTCPeerConnection.prototype.setRemoteDescription = function (desc) {
-            if (desc && typeof desc.sdp === 'string') {
+            if (!isHost && desc && typeof desc.sdp === 'string') {
                 var lines = desc.sdp.split('\r\n');
                 var expanded = [];
                 for (var i = 0; i < lines.length; i++) {
                     var l = lines[i];
+                    expanded.push(l);
                     if (l.startsWith('a=candidate:') && l.indexOf('.local') !== -1) {
-                        // Replace .local with both Tailscale and LAN IPs; skip the .local line
-                        expanded.push(l.replace(/[a-f0-9-]{8,}\.local/gi, TAILSCALE_HOST_IP).replace(/^(a=candidate:\S+)/, '$1ts'));
-                        expanded.push(l.replace(/[a-f0-9-]{8,}\.local/gi, LAN_HOST_IP).replace(/^(a=candidate:\S+)/, '$1lan'));
-                    } else {
-                        expanded.push(l);
+                        expanded.push(l.replace(/\S+\.local/gi, TAILSCALE_HOST_IP).replace(/^(a=candidate:\S+)/, '$1ts'));
+                        expanded.push(l.replace(/\S+\.local/gi, LAN_HOST_IP).replace(/^(a=candidate:\S+)/, '$1lan'));
                     }
                 }
                 desc = { type: desc.type, sdp: expanded.join('\r\n') };
@@ -177,7 +172,7 @@ window.addEventListener('load', function () {
             return _origSetRemote.apply(this, [desc]);
         };
 
-        // 3. onicecandidate setter: host side — emit Tailscale + LAN candidates instead of .local
+        // 3. onicecandidate setter: Host advertises Tailscale IP, LAN IP, and STUN/TURN
         var descProp = Object.getOwnPropertyDescriptor(RTCPeerConnection.prototype, 'onicecandidate');
         if (descProp && descProp.set) {
             var _origSetOnIce = descProp.set;
@@ -186,21 +181,20 @@ window.addEventListener('load', function () {
                     if (typeof fn !== 'function') return _origSetOnIce.call(this, fn);
                     var wrapped = function (evt) {
                         if (!evt || !evt.candidate || !evt.candidate.candidate) {
-                            return fn.apply(this, arguments); // null candidate = end-of-candidates, pass through
+                            return fn.apply(this, arguments); // null candidate = end of candidates
                         }
                         var str = evt.candidate.candidate;
                         var sdpMid = evt.candidate.sdpMid;
                         var sdpIdx = evt.candidate.sdpMLineIndex;
 
-                        // Discover actual LAN IP if Chrome exposes a real private IP
                         var lanMatch = str.match(/\b(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/);
                         if (lanMatch && lanMatch[1]) {
                             LAN_HOST_IP = lanMatch[1];
                         }
 
-                        // On host: when Chrome masks the IP with mDNS .local, emit real IP candidates
+                        // On host: when Chrome masks host candidate with mDNS .local, emit real IP candidates!
                         if (isHost && str.indexOf('.local') !== -1) {
-                            // Tailscale candidate
+                            // 1. Tailscale candidate
                             try {
                                 fn.call(this, {
                                     candidate: new RTCIceCandidate({
@@ -210,7 +204,7 @@ window.addEventListener('load', function () {
                                 });
                             } catch (e) {}
 
-                            // LAN candidate
+                            // 2. Local Wi-Fi (LAN) candidate
                             try {
                                 fn.call(this, {
                                     candidate: new RTCIceCandidate({
@@ -220,11 +214,9 @@ window.addEventListener('load', function () {
                                 });
                             } catch (e) {}
 
-                            // Don't emit the unresolvable .local candidate
                             return;
                         }
 
-                        // All other candidates (srflx STUN, relay TURN, real host IPs) pass through
                         return fn.apply(this, arguments);
                     };
                     return _origSetOnIce.call(this, wrapped);
@@ -233,62 +225,6 @@ window.addEventListener('load', function () {
                 configurable: true
             });
         }
-        // 4. addEventListener backup: intercept 'icecandidate' registered via addEventListener
-        //    (Some browsers / PeerJS versions use this instead of the onicecandidate setter)
-        var _origAddEvt = RTCPeerConnection.prototype.addEventListener;
-        RTCPeerConnection.prototype.addEventListener = function (type, fn, options) {
-            if (type === 'icecandidate' && typeof fn === 'function') {
-                var self = this;
-                var wrappedFn = function (evt) {
-                    if (!evt || !evt.candidate || !evt.candidate.candidate) {
-                        return fn.apply(this, arguments);
-                    }
-                    var str = evt.candidate.candidate;
-                    var sdpMid = evt.candidate.sdpMid;
-                    var sdpIdx = evt.candidate.sdpMLineIndex;
-
-                    var lanMatch = str.match(/\b(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/);
-                    if (lanMatch && lanMatch[1]) { LAN_HOST_IP = lanMatch[1]; }
-
-                    if (isHost && str.indexOf('.local') !== -1) {
-                        try {
-                            // Dispatch Tailscale candidate
-                            var tsEvt = Object.create(evt);
-                            Object.defineProperty(tsEvt, 'candidate', {
-                                value: new RTCIceCandidate({ candidate: resolveMdns(str, TAILSCALE_HOST_IP, 'ts'), sdpMid: sdpMid, sdpMLineIndex: sdpIdx }),
-                                configurable: true
-                            });
-                            fn.call(this, tsEvt);
-                        } catch (e) {}
-                        try {
-                            // Dispatch LAN candidate
-                            var lanEvt = Object.create(evt);
-                            Object.defineProperty(lanEvt, 'candidate', {
-                                value: new RTCIceCandidate({ candidate: resolveMdns(str, LAN_HOST_IP, 'lan'), sdpMid: sdpMid, sdpMLineIndex: sdpIdx }),
-                                configurable: true
-                            });
-                            fn.call(this, lanEvt);
-                        } catch (e) {}
-                        return;
-                    }
-                    return fn.apply(this, arguments);
-                };
-                // Store the wrapper so removeEventListener can match it
-                fn.__iceWrapped = wrappedFn;
-                return _origAddEvt.call(this, type, wrappedFn, options);
-            }
-            return _origAddEvt.apply(this, arguments);
-        };
-
-        // 5. removeEventListener: unwrap back to original to avoid listener leaks
-        var _origRemoveEvt = RTCPeerConnection.prototype.removeEventListener;
-        RTCPeerConnection.prototype.removeEventListener = function (type, fn, options) {
-            if (type === 'icecandidate' && fn && fn.__iceWrapped) {
-                return _origRemoveEvt.call(this, type, fn.__iceWrapped, options);
-            }
-            return _origRemoveEvt.apply(this, arguments);
-        };
-
     })();
 
     // ── Detect room ID from URL (?room=... OR #mw-... OR path) ────────────────
