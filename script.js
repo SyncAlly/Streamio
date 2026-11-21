@@ -40,6 +40,7 @@ window.addEventListener('load', function () {
     const chatForm       = document.getElementById('chat-form');
     const messageInput   = document.getElementById('message-input');
     const messagesList   = document.getElementById('messages');
+    const userNameInput  = document.getElementById('user-name-input');
 
     // ── High-Speed STUN + Global Authenticated TURN Relay ─────────────────────
     // Guaranteed WebRTC connection across all networks, VPNs, mobile cellular, and firewalls
@@ -83,7 +84,8 @@ window.addEventListener('load', function () {
     let isHost           = false;
     let roomId           = null;
     let viewerCounter    = 0;
-    let mySenderName     = 'Friend';
+    const savedName      = (typeof localStorage !== 'undefined') ? (localStorage.getItem('streamio_username') || '') : '';
+    let mySenderName     = savedName || 'Friend';
 
     // ── Tailscale Enforcer: Force Tailscale (100.x) and Block Local Wi-Fi (192.168.x) ──
     const TAILSCALE_HOST_IP = '100.109.86.125';
@@ -182,6 +184,22 @@ window.addEventListener('load', function () {
     roomId = fromQuery || fromHash || fromPath || null;
 
     // ── Boot ──────────────────────────────────────────────────────────────────
+    if (userNameInput) {
+        if (savedName) {
+            userNameInput.value = savedName;
+        }
+        userNameInput.addEventListener('input', function () {
+            const val = userNameInput.value.trim();
+            if (val) {
+                mySenderName = val;
+                try { localStorage.setItem('streamio_username', val); } catch (e) {}
+            } else {
+                mySenderName = isHost ? 'Host' : 'Friend';
+                try { localStorage.removeItem('streamio_username'); } catch (e) {}
+            }
+        });
+    }
+
     if (roomId) {
         startViewer(roomId);
     } else {
@@ -294,7 +312,12 @@ window.addEventListener('load', function () {
 
     function startHost() {
         isHost = true;
-        mySenderName = 'Host';
+        const saved = (typeof localStorage !== 'undefined') ? (localStorage.getItem('streamio_username') || '') : '';
+        mySenderName = saved || 'Host';
+        if (userNameInput) {
+            if (!userNameInput.value) userNameInput.value = mySenderName;
+            userNameInput.placeholder = 'Your name (Host)';
+        }
         viewerCounter = 0;
         const hostId = 'mw-' + Math.random().toString(36).substring(2, 8);
         peer = new Peer(hostId, PEER_OPTIONS);
@@ -676,7 +699,13 @@ window.addEventListener('load', function () {
 
             // Handle name assignment from host
             if (data.type === 'assign-name' && data.name) {
-                mySenderName = data.name;
+                const hasCustomName = (typeof localStorage !== 'undefined') && localStorage.getItem('streamio_username');
+                if (!hasCustomName) {
+                    mySenderName = data.name;
+                    if (userNameInput && !userNameInput.value) {
+                        userNameInput.value = data.name;
+                    }
+                }
                 return;
             }
 
@@ -706,7 +735,8 @@ window.addEventListener('load', function () {
         if (!text) return;
         appendMsg('me', text, 'You');
         messageInput.value = '';
-        var payload = { text: text, sender: mySenderName || (isHost ? 'Host' : 'Friend') };
+        var senderName = (userNameInput && userNameInput.value.trim()) || mySenderName || (isHost ? 'Host' : 'Friend');
+        var payload = { text: text, sender: senderName };
         activeConns.forEach(function (c) {
             if (c.open) c.send(payload);
         });
