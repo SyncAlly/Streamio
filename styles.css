@@ -271,9 +271,8 @@ main {
     pointer-events: none;
 }
 
-/* Shown on hover or when user clicks/taps */
-.video-overlay-controls.visible,
-#video-container:hover .video-overlay-controls {
+/* Shown on click / tap toggle */
+.video-overlay-controls.visible {
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;

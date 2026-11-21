@@ -526,7 +526,7 @@ window.addEventListener('load', function () {
     // ══════════════════════════════════════════════════════════════════════════
     function syncAudioUI() {
         const isMuted = videoPlayer.muted;
-        speakerBtn.textContent = isMuted ? 'Movie Muted' : 'Movie Audio';
+        if (speakerBtn) speakerBtn.textContent = isMuted ? 'Movie Muted' : 'Movie Audio';
         if (overlayMuteBtn) {
             overlayMuteBtn.innerHTML = isMuted ? SVG_SPEAKER_MUTED : SVG_SPEAKER_ON;
             overlayMuteBtn.title = isMuted ? 'Unmute Movie Audio' : 'Mute Movie Audio';
@@ -542,7 +542,7 @@ window.addEventListener('load', function () {
 
     function syncPlaybackUI() {
         const isPaused = videoPlayer.paused;
-        pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+        if (pauseBtn) pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
         if (overlayPauseBtn) {
             overlayPauseBtn.innerHTML = isPaused ? SVG_PLAY : SVG_PAUSE;
             overlayPauseBtn.title = isPaused ? 'Play / Resume Movie' : 'Pause Movie';
@@ -551,7 +551,7 @@ window.addEventListener('load', function () {
 
     function syncFullscreenUI() {
         const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-        fullscreenBtn.textContent = isFs ? 'Exit Fullscreen' : 'Fullscreen';
+        if (fullscreenBtn) fullscreenBtn.textContent = isFs ? 'Exit Fullscreen' : 'Fullscreen';
         if (overlayFsBtn) {
             overlayFsBtn.innerHTML = isFs ? SVG_FS_EXIT : SVG_FS_ENTER;
             overlayFsBtn.title = isFs ? 'Exit Fullscreen' : 'Fullscreen';
@@ -569,15 +569,29 @@ window.addEventListener('load', function () {
         }
     }
 
-    // Auto-hide controls overlay after 3.5s of inactivity
+    // Toggle overlay controls on click: pops up on first click, disappears on next click
     let overlayHideTimer = null;
-    function showOverlayControls() {
+    function toggleOverlayControls(e) {
         if (!overlayControls) return;
-        overlayControls.classList.add('visible');
+        // Don't toggle if user clicked directly on one of the action buttons or unmute overlay
+        if (e && e.target && (e.target.closest('#video-overlay-controls') || e.target.closest('#unmute-overlay-btn'))) {
+            return;
+        }
+
+        const isCurrentlyVisible = overlayControls.classList.contains('visible');
         clearTimeout(overlayHideTimer);
-        overlayHideTimer = setTimeout(function () {
+
+        if (isCurrentlyVisible) {
+            // Already visible -> hide immediately on click!
             overlayControls.classList.remove('visible');
-        }, 3500);
+        } else {
+            // Hidden -> pop up buttons!
+            overlayControls.classList.add('visible');
+            // Auto-hide after 4 seconds of inactivity as a fallback
+            overlayHideTimer = setTimeout(function () {
+                overlayControls.classList.remove('visible');
+            }, 4000);
+        }
     }
 
     // Initialize UI states
@@ -591,25 +605,34 @@ window.addEventListener('load', function () {
     document.addEventListener('fullscreenchange', syncFullscreenUI);
     document.addEventListener('webkitfullscreenchange', syncFullscreenUI);
 
-    speakerBtn.addEventListener('click', function () {
-        videoPlayer.muted = !videoPlayer.muted;
-        syncAudioUI();
-    });
+    if (speakerBtn) {
+        speakerBtn.addEventListener('click', function () {
+            videoPlayer.muted = !videoPlayer.muted;
+            syncAudioUI();
+        });
+    }
 
-    pauseBtn.addEventListener('click', function () {
-        if (videoPlayer.paused) videoPlayer.play();
-        else videoPlayer.pause();
-        syncPlaybackUI();
-    });
+    if (pauseBtn) {
+        pauseBtn.addEventListener('click', function () {
+            if (videoPlayer.paused) videoPlayer.play();
+            else videoPlayer.pause();
+            syncPlaybackUI();
+        });
+    }
 
-    fullscreenBtn.addEventListener('click', toggleFullscreen);
+    if (fullscreenBtn) {
+        fullscreenBtn.addEventListener('click', toggleFullscreen);
+    }
 
     if (overlayMuteBtn) {
         overlayMuteBtn.addEventListener('click', function (e) {
             e.stopPropagation();
             videoPlayer.muted = !videoPlayer.muted;
             syncAudioUI();
-            showOverlayControls();
+            clearTimeout(overlayHideTimer);
+            overlayHideTimer = setTimeout(function () {
+                overlayControls.classList.remove('visible');
+            }, 4000);
         });
     }
 
@@ -619,7 +642,10 @@ window.addEventListener('load', function () {
             if (videoPlayer.paused) videoPlayer.play();
             else videoPlayer.pause();
             syncPlaybackUI();
-            showOverlayControls();
+            clearTimeout(overlayHideTimer);
+            overlayHideTimer = setTimeout(function () {
+                overlayControls.classList.remove('visible');
+            }, 4000);
         });
     }
 
@@ -627,7 +653,10 @@ window.addEventListener('load', function () {
         overlayFsBtn.addEventListener('click', function (e) {
             e.stopPropagation();
             toggleFullscreen();
-            showOverlayControls();
+            clearTimeout(overlayHideTimer);
+            overlayHideTimer = setTimeout(function () {
+                overlayControls.classList.remove('visible');
+            }, 4000);
         });
     }
 
@@ -641,11 +670,7 @@ window.addEventListener('load', function () {
     }
 
     if (videoContainer) {
-        videoContainer.addEventListener('mousemove', showOverlayControls);
-        videoContainer.addEventListener('touchstart', showOverlayControls, { passive: true });
-        videoContainer.addEventListener('click', function () {
-            showOverlayControls();
-        });
+        videoContainer.addEventListener('click', toggleOverlayControls);
     }
 
     if (overlayControls) {
