@@ -249,6 +249,88 @@ main {
     transform: translate(-50%, -50%) scale(1.06);
 }
 
+/* In-Video & Fullscreen Overlay Controls (Bottom Right) */
+.video-overlay-controls {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(15, 23, 42, 0.78);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 9999px;
+    padding: 6px 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    pointer-events: none;
+}
+
+/* Shown on hover or when user clicks/taps */
+.video-overlay-controls.visible,
+#video-container:hover .video-overlay-controls {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.overlay-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: transparent;
+    border: none;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.15s ease, color 0.2s ease;
+    outline: none;
+    padding: 0;
+}
+
+.overlay-btn:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+    transform: scale(1.1);
+}
+
+.overlay-btn:active {
+    transform: scale(0.95);
+}
+
+.overlay-btn svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+}
+
+/* Fullscreen Mode responsive sizing */
+#video-container:fullscreen .video-overlay-controls,
+#video-container:-webkit-full-screen .video-overlay-controls {
+    bottom: 28px;
+    right: 28px;
+    padding: 8px 14px;
+    gap: 12px;
+}
+
+#video-container:fullscreen .overlay-btn,
+#video-container:-webkit-full-screen .overlay-btn {
+    width: 44px;
+    height: 44px;
+}
+
+#video-container:fullscreen .overlay-btn svg,
+#video-container:-webkit-full-screen .overlay-btn svg {
+    width: 24px;
+    height: 24px;
+}
+
 .unmute-overlay.hidden {
     display: none;
 }

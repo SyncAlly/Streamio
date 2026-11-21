@@ -34,7 +34,17 @@
                     <p id="placeholder-text">Click "Start Screen Share" to begin hosting</p>
                 </div>
                 <!-- Interactive Unmute Button Overlay -->
-                <button id="unmute-overlay-btn" class="unmute-overlay hidden">🔊 Click to Unmute Movie</button>
+                <button id="unmute-overlay-btn" class="unmute-overlay hidden">Click to Unmute Movie</button>
+
+                <!-- Fullscreen & In-Video Overlay Controls (Bottom Right) -->
+                <div id="video-overlay-controls" class="video-overlay-controls">
+                    <!-- Mute / Unmute Button -->
+                    <button id="overlay-mute-btn" class="overlay-btn" title="Mute / Unmute Audio" aria-label="Mute / Unmute Audio"></button>
+                    <!-- Pause / Resume Button (Middle) -->
+                    <button id="overlay-pause-btn" class="overlay-btn" title="Pause / Resume Movie" aria-label="Pause / Resume Movie"></button>
+                    <!-- Fullscreen Toggle Button (Right) -->
+                    <button id="overlay-fullscreen-btn" class="overlay-btn" title="Toggle Fullscreen" aria-label="Toggle Fullscreen"></button>
+                </div>
             </div>
 
             <!-- Hidden Audio Element for Friend's Microphone Voice -->
@@ -44,9 +54,9 @@
             <div id="controls">
                 <button id="screen-share-btn" class="btn btn-primary">Start Screen Share</button>
                 <!-- 2-Way Voice Chat (Mic) Button -->
-                <button id="mic-btn" class="btn btn-secondary">🎙️ Join Voice Chat</button>
+                <button id="mic-btn" class="btn btn-secondary">Join Voice Chat</button>
                 <!-- Movie Speaker Volume Button -->
-                <button id="speaker-btn" class="btn btn-secondary">🔊 Movie Audio</button>
+                <button id="speaker-btn" class="btn btn-secondary">Movie Audio</button>
                 <button id="pause-btn" class="btn btn-secondary">Pause</button>
                 <button id="fullscreen-btn" class="btn btn-secondary">Fullscreen</button>
             </div>

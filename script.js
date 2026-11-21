@@ -2,21 +2,34 @@
 window.addEventListener('load', function () {
 
     // ── DOM refs ──────────────────────────────────────────────────────────────
+    const videoContainer = document.getElementById('video-container');
     const videoPlayer    = document.getElementById('video-player');
     const voiceAudio     = document.getElementById('voice-audio');
     const placeholder    = document.getElementById('video-placeholder');
     const placeholderText= document.getElementById('placeholder-text');
+    const unmuteOverlayBtn = document.getElementById('unmute-overlay-btn');
+    const overlayControls = document.getElementById('video-overlay-controls');
+    const overlayMuteBtn = document.getElementById('overlay-mute-btn');
+    const overlayPauseBtn= document.getElementById('overlay-pause-btn');
+    const overlayFsBtn   = document.getElementById('overlay-fullscreen-btn');
     const routeIndicator = document.getElementById('route-indicator');
     const wifiIndicator  = document.getElementById('wifi-indicator');
     const statusBadge    = document.getElementById('status-badge');
     const routeBadge     = document.getElementById('route-badge');
     const screenShareBtn = document.getElementById('screen-share-btn');
 
-    // ── SVG Icons for Aligned Indicators ─────────────────────────────────────
+    // ── SVG Icons for Aligned Indicators & Overlay Controls ──────────────────
     const SVG_HOUSE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>';
     const SVG_GLOBE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>';
     const SVG_WIFI_ON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.86a10 10 0 0 1 14 0"/><path d="M8.5 16.43a5 5 0 0 1 7 0"/></svg>';
     const SVG_WIFI_OFF = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="2" x2="22" y2="22"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.82"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.61"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>';
+
+    const SVG_SPEAKER_ON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+    const SVG_SPEAKER_MUTED = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
+    const SVG_PAUSE = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
+    const SVG_PLAY = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
+    const SVG_FS_ENTER = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+    const SVG_FS_EXIT = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
     const micBtn         = document.getElementById('mic-btn');
     const speakerBtn     = document.getElementById('speaker-btn');
     const pauseBtn       = document.getElementById('pause-btn');
@@ -463,9 +476,8 @@ window.addEventListener('load', function () {
                 });
                 micTrack = localMicStream.getAudioTracks()[0];
                 micTrack.enabled = true;
-                micBtn.textContent = '🎙️ Mic: On (Talking)';
+                micBtn.textContent = 'Mic: On (Talking)';
                 micBtn.className = 'btn btn-success';
-                appendMsg('system', 'Mic ON — you are live.');
                 connectedPeers.forEach(function (pid) {
                     peer.call(pid, localMicStream, { metadata: { type: 'voice' } });
                 });
@@ -476,13 +488,11 @@ window.addEventListener('load', function () {
         }
         micTrack.enabled = !micTrack.enabled;
         if (micTrack.enabled) {
-            micBtn.textContent = '🎙️ Mic: On (Talking)';
+            micBtn.textContent = 'Mic: On (Talking)';
             micBtn.className = 'btn btn-success';
-            appendMsg('system', 'Mic unmuted.');
         } else {
-            micBtn.textContent = '🔇 Mic: Muted';
+            micBtn.textContent = 'Mic: Muted';
             micBtn.className = 'btn btn-secondary';
-            appendMsg('system', 'Mic muted.');
         }
     });
 
@@ -512,23 +522,144 @@ window.addEventListener('load', function () {
     });
 
     // ══════════════════════════════════════════════════════════════════════════
-    // 6. Player controls
+    // 6. Player controls & Fullscreen In-Video Overlay
     // ══════════════════════════════════════════════════════════════════════════
+    function syncAudioUI() {
+        const isMuted = videoPlayer.muted;
+        speakerBtn.textContent = isMuted ? 'Movie Muted' : 'Movie Audio';
+        if (overlayMuteBtn) {
+            overlayMuteBtn.innerHTML = isMuted ? SVG_SPEAKER_MUTED : SVG_SPEAKER_ON;
+            overlayMuteBtn.title = isMuted ? 'Unmute Movie Audio' : 'Mute Movie Audio';
+        }
+        if (unmuteOverlayBtn) {
+            if (isMuted && videoPlayer.srcObject) {
+                unmuteOverlayBtn.classList.remove('hidden');
+            } else {
+                unmuteOverlayBtn.classList.add('hidden');
+            }
+        }
+    }
+
+    function syncPlaybackUI() {
+        const isPaused = videoPlayer.paused;
+        pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+        if (overlayPauseBtn) {
+            overlayPauseBtn.innerHTML = isPaused ? SVG_PLAY : SVG_PAUSE;
+            overlayPauseBtn.title = isPaused ? 'Play / Resume Movie' : 'Pause Movie';
+        }
+    }
+
+    function syncFullscreenUI() {
+        const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        fullscreenBtn.textContent = isFs ? 'Exit Fullscreen' : 'Fullscreen';
+        if (overlayFsBtn) {
+            overlayFsBtn.innerHTML = isFs ? SVG_FS_EXIT : SVG_FS_ENTER;
+            overlayFsBtn.title = isFs ? 'Exit Fullscreen' : 'Fullscreen';
+        }
+    }
+
+    function toggleFullscreen() {
+        const c = videoContainer || document.getElementById('video-container');
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+            if (c.requestFullscreen) c.requestFullscreen().catch(function () {});
+            else if (c.webkitRequestFullscreen) c.webkitRequestFullscreen();
+        } else {
+            if (document.exitFullscreen) document.exitFullscreen();
+            else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        }
+    }
+
+    // Auto-hide controls overlay after 3.5s of inactivity
+    let overlayHideTimer = null;
+    function showOverlayControls() {
+        if (!overlayControls) return;
+        overlayControls.classList.add('visible');
+        clearTimeout(overlayHideTimer);
+        overlayHideTimer = setTimeout(function () {
+            overlayControls.classList.remove('visible');
+        }, 3500);
+    }
+
+    // Initialize UI states
+    syncAudioUI();
+    syncPlaybackUI();
+    syncFullscreenUI();
+
+    videoPlayer.addEventListener('volumechange', syncAudioUI);
+    videoPlayer.addEventListener('play', syncPlaybackUI);
+    videoPlayer.addEventListener('pause', syncPlaybackUI);
+    document.addEventListener('fullscreenchange', syncFullscreenUI);
+    document.addEventListener('webkitfullscreenchange', syncFullscreenUI);
+
     speakerBtn.addEventListener('click', function () {
         videoPlayer.muted = !videoPlayer.muted;
-        speakerBtn.textContent = videoPlayer.muted ? '🔇 Movie Muted' : '🔊 Movie Audio';
+        syncAudioUI();
     });
 
     pauseBtn.addEventListener('click', function () {
-        if (videoPlayer.paused) { videoPlayer.play(); pauseBtn.textContent = 'Pause'; }
-        else { videoPlayer.pause(); pauseBtn.textContent = 'Resume'; }
+        if (videoPlayer.paused) videoPlayer.play();
+        else videoPlayer.pause();
+        syncPlaybackUI();
     });
 
-    fullscreenBtn.addEventListener('click', function () {
-        var c = document.getElementById('video-container');
-        if (!document.fullscreenElement) c.requestFullscreen().catch(function () {});
-        else document.exitFullscreen();
-    });
+    fullscreenBtn.addEventListener('click', toggleFullscreen);
+
+    if (overlayMuteBtn) {
+        overlayMuteBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            videoPlayer.muted = !videoPlayer.muted;
+            syncAudioUI();
+            showOverlayControls();
+        });
+    }
+
+    if (overlayPauseBtn) {
+        overlayPauseBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (videoPlayer.paused) videoPlayer.play();
+            else videoPlayer.pause();
+            syncPlaybackUI();
+            showOverlayControls();
+        });
+    }
+
+    if (overlayFsBtn) {
+        overlayFsBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            toggleFullscreen();
+            showOverlayControls();
+        });
+    }
+
+    if (unmuteOverlayBtn) {
+        unmuteOverlayBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            videoPlayer.muted = false;
+            videoPlayer.play().catch(function () {});
+            syncAudioUI();
+        });
+    }
+
+    if (videoContainer) {
+        videoContainer.addEventListener('mousemove', showOverlayControls);
+        videoContainer.addEventListener('touchstart', showOverlayControls, { passive: true });
+        videoContainer.addEventListener('click', function () {
+            showOverlayControls();
+        });
+    }
+
+    if (overlayControls) {
+        overlayControls.addEventListener('mouseenter', function () {
+            clearTimeout(overlayHideTimer);
+            overlayControls.classList.add('visible');
+        });
+        overlayControls.addEventListener('mouseleave', function () {
+            clearTimeout(overlayHideTimer);
+            overlayHideTimer = setTimeout(function () {
+                overlayControls.classList.remove('visible');
+            }, 2000);
+        });
+    }
 
     copyLinkBtn.addEventListener('click', function () {
         if (!shareLinkInput.value) return;
