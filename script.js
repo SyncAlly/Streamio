@@ -107,21 +107,29 @@ window.addEventListener('load', function () {
     const savedName      = (typeof localStorage !== 'undefined') ? (localStorage.getItem('streamio_username') || '') : '';
     let mySenderName     = savedName || 'Friend';
 
-    // Helper: Creates a silent audio stream with a disabled track for clean initial full-duplex setup
+    // Helper: Creates an active silent audio stream with real PCM silence to keep WebRTC ICE/NAT alive
     function createSilentAudioStream() {
         try {
-            const AudioCtx = window.AudioContext || window.webkitAudioContext;
-            if (!AudioCtx) return null;
-            const ctx = new AudioCtx();
+            const ctx = getAudioContext();
+            if (!ctx) return null;
             const dest = ctx.createMediaStreamDestination();
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
-            gain.gain.value = 0; // silence
+            gain.gain.value = 0; // pure silence
             osc.connect(gain);
             gain.connect(dest);
             osc.start();
+
+            // Keep track active so WebRTC transmits 0-amplitude packets (keeps NAT & ICE consent alive)
             const track = dest.stream.getAudioTracks()[0];
-            if (track) track.enabled = false;
+            if (track) track.enabled = true;
+
+            // Bind to hidden sink to prevent Chromium garbage collection
+            const sink = document.createElement('audio');
+            sink.muted = true;
+            sink.srcObject = dest.stream;
+            sink.play().catch(function () {});
+
             return dest.stream;
         } catch (e) {
             return null;
@@ -428,14 +436,21 @@ window.addEventListener('load', function () {
                 updateStatus('Live • Friend Connected', 'badge-connected');
                 if (localStream) callPeerWithStream(conn.peer, localStream, 'screen');
 
-                // Establish room voice mix to the new viewer
-                const outgoingMix = getOrCreateMixForPeer(conn.peer);
-                const voiceCall = peer.call(conn.peer, outgoingMix, { metadata: { type: 'voice' } });
-                if (voiceCall) {
-                    voiceCall.on('stream', function (stream) {
-                        addPeerVoiceToMixer(conn.peer, stream);
-                    });
-                }
+                // Establish room voice mix to the new viewer after 200ms stagger to prevent dual-offer signaling collision
+                setTimeout(function () {
+                    if (!peer || !connectedPeers.has(conn.peer)) return;
+                    const outgoingMix = getOrCreateMixForPeer(conn.peer);
+                    const voiceCall = peer.call(conn.peer, outgoingMix, { metadata: { type: 'voice' } });
+                    if (voiceCall) {
+                        peerVoiceCalls.set(conn.peer, voiceCall);
+                        voiceCall.on('stream', function (stream) {
+                            addPeerVoiceToMixer(conn.peer, stream);
+                        });
+                        voiceCall.on('close', function () {
+                            removePeerVoiceFromMixer(conn.peer);
+                        });
+                    }
+                }, 200);
             });
             conn.on('close', function () {
                 removePeerVoiceFromMixer(conn.peer);
@@ -451,6 +466,7 @@ window.addEventListener('load', function () {
     function stopShare() {
         if (localStream) { localStream.getTracks().forEach(function (t) { t.stop(); }); localStream = null; }
         videoPlayer.srcObject = null;
+        peerVoiceCalls.clear();
         document.querySelectorAll('audio[id^="peer-audio-"]').forEach(function (el) {
             try { el.pause(); el.srcObject = null; el.remove(); } catch (e) {}
         });
@@ -528,13 +544,27 @@ window.addEventListener('load', function () {
     // Web Audio Mix-Minus Group Voice Engine (Host MCU Hub)
     // ══════════════════════════════════════════════════════════════════════════
     let audioCtx = null;
+    let keepAliveOsc = null;
     let hostMicSourceNode = null;
-    const peerVoiceEntries = new Map(); // peerId -> { sourceNode, destinationNode, stream }
+    const peerVoiceEntries = new Map(); // peerId -> { sourceNode, destinationNode, stream, sink }
+    const peerVoiceCalls   = new Map(); // peerId -> call
 
     function getAudioContext() {
         if (!audioCtx) {
             const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
-            if (AudioCtxClass) audioCtx = new AudioCtxClass();
+            if (AudioCtxClass) {
+                audioCtx = new AudioCtxClass();
+                try {
+                    // Critical Chromium Fix: Silent oscillator attached to ctx.destination
+                    // Forces Chrome's WebAudio render thread to run 24/7 without ever sleeping!
+                    const silentGain = audioCtx.createGain();
+                    silentGain.gain.value = 0.00001;
+                    keepAliveOsc = audioCtx.createOscillator();
+                    keepAliveOsc.connect(silentGain);
+                    silentGain.connect(audioCtx.destination);
+                    keepAliveOsc.start();
+                } catch (e) {}
+            }
         }
         if (audioCtx && audioCtx.state === 'suspended') {
             audioCtx.resume().catch(function () {});
@@ -542,9 +572,33 @@ window.addEventListener('load', function () {
         return audioCtx;
     }
 
-    // Unlocks browser audio on first user interaction anywhere
-    window.addEventListener('click', function () { getAudioContext(); }, { once: true });
-    window.addEventListener('touchstart', function () { getAudioContext(); }, { once: true, passive: true });
+    // Unlocks browser audio & autoplay policies on any user interaction anywhere
+    function unlockAllAudio() {
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(function () {});
+        }
+        if (voiceAudio) {
+            voiceAudio.muted = false;
+            voiceAudio.volume = 1.0;
+            if (voiceAudio.srcObject && voiceAudio.paused) {
+                voiceAudio.play().catch(function () {});
+            }
+        }
+        if (videoPlayer && videoPlayer.srcObject && videoPlayer.paused) {
+            videoPlayer.play().catch(function () {});
+        }
+        document.querySelectorAll('audio[id^="peer-audio-"]').forEach(function (el) {
+            el.muted = false;
+            el.volume = 1.0;
+            if (el.srcObject && el.paused) {
+                el.play().catch(function () {});
+            }
+        });
+    }
+    window.addEventListener('click', unlockAllAudio);
+    window.addEventListener('touchstart', unlockAllAudio, { passive: true });
+    window.addEventListener('touchend', unlockAllAudio, { passive: true });
+    window.addEventListener('keydown', unlockAllAudio);
 
     // Returns a personalized audio stream for a specific viewer containing everyone ELSE's voice
     function getOrCreateMixForPeer(peerId) {
@@ -555,7 +609,24 @@ window.addEventListener('load', function () {
         let entry = peerVoiceEntries.get(peerId);
         if (!entry) {
             const dest = ctx.createMediaStreamDestination();
-            entry = { sourceNode: null, destinationNode: dest, stream: null };
+
+            // Critical Chromium Fix: Active silent generator feeding dest so it produces real PCM frames immediately
+            try {
+                const dummyGain = ctx.createGain();
+                dummyGain.gain.value = 0;
+                const dummyOsc = ctx.createOscillator();
+                dummyOsc.connect(dummyGain);
+                dummyGain.connect(dest);
+                dummyOsc.start();
+            } catch (e) {}
+
+            // Critical Chromium Fix: Bind dest.stream to a silent audio element to prevent garbage collection
+            const sink = document.createElement('audio');
+            sink.muted = true;
+            sink.srcObject = dest.stream;
+            sink.play().catch(function () {});
+
+            entry = { sourceNode: null, destinationNode: dest, stream: dest.stream, sink: sink };
             peerVoiceEntries.set(peerId, entry);
 
             // Connect host microphone to this peer if host mic is active
@@ -587,6 +658,8 @@ window.addEventListener('load', function () {
             peerAudio.style.display = 'none';
             document.body.appendChild(peerAudio);
         }
+        peerAudio.muted = false;
+        peerAudio.volume = 1.0;
         peerAudio.srcObject = stream;
         peerAudio.play().catch(function () {});
 
@@ -595,9 +668,8 @@ window.addEventListener('load', function () {
         // 2. Mix into all OTHER viewers' audio streams (mix-minus: never back to themselves)
         let entry = peerVoiceEntries.get(peerId);
         if (!entry) {
-            const dest = ctx.createMediaStreamDestination();
-            entry = { sourceNode: null, destinationNode: dest, stream: null };
-            peerVoiceEntries.set(peerId, entry);
+            getOrCreateMixForPeer(peerId);
+            entry = peerVoiceEntries.get(peerId);
         }
 
         if (entry.sourceNode) {
@@ -618,6 +690,7 @@ window.addEventListener('load', function () {
 
     // Cleans up a peer's audio nodes when they leave
     function removePeerVoiceFromMixer(peerId) {
+        peerVoiceCalls.delete(peerId);
         const peerAudio = document.getElementById('peer-audio-' + peerId);
         if (peerAudio) {
             try {
@@ -630,6 +703,9 @@ window.addEventListener('load', function () {
         if (entry) {
             if (entry.sourceNode) {
                 try { entry.sourceNode.disconnect(); } catch (e) {}
+            }
+            if (entry.sink) {
+                try { entry.sink.pause(); entry.sink.srcObject = null; entry.sink.remove(); } catch (e) {}
             }
             peerVoiceEntries.delete(peerId);
         }
@@ -666,6 +742,7 @@ window.addEventListener('load', function () {
             const callerId = call.peer;
             if (isHost) {
                 // Host answers with this peer's personalized mix-minus stream
+                peerVoiceCalls.set(callerId, call);
                 const outgoingMix = getOrCreateMixForPeer(callerId);
                 call.answer(outgoingMix);
                 call.on('stream', function (stream) {
@@ -680,8 +757,11 @@ window.addEventListener('load', function () {
                 const silentStream = createSilentAudioStream();
                 call.answer(localMicStream || silentStream || undefined);
                 call.on('stream', function (stream) {
+                    voiceAudio.muted = false;
+                    voiceAudio.volume = 1.0;
                     voiceAudio.srcObject = stream;
                     voiceAudio.play().catch(function () {});
+                    unlockAllAudio();
                 });
             }
         } else {
@@ -709,6 +789,7 @@ window.addEventListener('load', function () {
                 }).catch(function () {
                     placeholderText.textContent = 'Click here to play';
                 });
+                unlockAllAudio();
             });
         }
     }
@@ -719,6 +800,7 @@ window.addEventListener('load', function () {
             videoPlayer.muted = false;
             videoPlayer.play().catch(function () {});
         }
+        unlockAllAudio();
     });
     placeholder.addEventListener('click', function () {
         if (videoPlayer.srcObject) {
@@ -726,13 +808,14 @@ window.addEventListener('load', function () {
             placeholder.classList.add('hidden');
             videoPlayer.play().catch(function () {});
         }
+        unlockAllAudio();
     });
 
     // ══════════════════════════════════════════════════════════════════════════
     // 4. Microphone (Full Group Voice Chat)
     // ══════════════════════════════════════════════════════════════════════════
     micBtn.addEventListener('click', async function () {
-        getAudioContext();
+        unlockAllAudio();
         if (!localMicStream) {
             try {
                 localMicStream = await navigator.mediaDevices.getUserMedia({
@@ -766,6 +849,8 @@ window.addEventListener('load', function () {
                         activeVoiceCall = peer.call(roomId, localMicStream, { metadata: { type: 'voice' } });
                         if (activeVoiceCall) {
                             activeVoiceCall.on('stream', function (stream) {
+                                voiceAudio.muted = false;
+                                voiceAudio.volume = 1.0;
                                 voiceAudio.srcObject = stream;
                                 voiceAudio.play().catch(function () {});
                             });
