@@ -596,26 +596,38 @@ window.addEventListener('load', function () {
 
                     let label = '';
                     let badgeClass = '';
+                    let toastClass = '';
+                    let icon = '⚡';
 
                     // Check if either endpoint is using a Tailscale 100.x.x.x private IP
                     if (localIp.startsWith('100.') || remoteIp.startsWith('100.')) {
-                        label = '⚡ Tailscale Direct (100.x) • 0 MB Cloud';
+                        label = 'Tailscale Direct (100.x) • 0 MB Cloud';
                         badgeClass = 'badge-tailscale';
+                        toastClass = 'toast-tailscale';
+                        icon = '⚡';
                     } else if (localType === 'relay' || remoteType === 'relay') {
-                        label = '☁️ Cloud Relay (Metered)';
+                        label = 'Cloud Relay (Metered)';
                         badgeClass = 'badge-relay';
+                        toastClass = 'toast-relay';
+                        icon = '☁️';
                     } else if (localIp.startsWith('192.168.') || remoteIp.startsWith('192.168.') || localIp.startsWith('10.') || localIp.startsWith('172.')) {
-                        label = '🏠 Local Wi-Fi (LAN)';
+                        label = 'Local Wi-Fi (LAN)';
                         badgeClass = 'badge-connected';
+                        toastClass = 'toast-lan';
+                        icon = '🏠';
                     } else {
-                        label = '🌐 Direct Internet (STUN)';
+                        label = 'Direct Internet (STUN)';
                         badgeClass = 'badge-connected';
+                        toastClass = 'toast-direct';
+                        icon = '🌐';
                     }
 
                     if (label && label !== lastReportedRoute) {
                         lastReportedRoute = label;
-                        updateRouteBadge(label, badgeClass);
-                        appendMsg('system', '⚡ Active Route: ' + label);
+                        const fullLabel = icon + ' ' + label;
+                        updateRouteBadge(fullLabel, badgeClass);
+                        // Show sleek floating bubble in bottom-left corner without polluting live chat
+                        showToast('Connection Type', fullLabel, toastClass, 4500);
                     }
                 }
             } catch (e) {}
@@ -636,6 +648,58 @@ window.addEventListener('load', function () {
         routeBadge.className = 'badge ' + cls;
         routeBadge.classList.remove('hidden');
         routeBadge.style.display = 'inline-block';
+    }
+
+    // ── Floating Toast Bubble Notification System ─────────────────────────────
+    function showToast(title, text, toastClass, duration) {
+        let container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            container.className = 'toast-container';
+            document.body.appendChild(container);
+        }
+
+        // Clean out older toast so messages don't clutter the screen
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
+        }
+
+        const bubble = document.createElement('div');
+        bubble.className = 'toast-bubble ' + (toastClass || '');
+
+        bubble.innerHTML =
+            '<div class="toast-content">' +
+                '<span class="toast-title">' + esc(title) + '</span>' +
+                '<span class="toast-text">' + esc(text) + '</span>' +
+            '</div>';
+
+        // Tap/click to dismiss early
+        bubble.addEventListener('click', function () {
+            bubble.classList.remove('toast-visible');
+            bubble.classList.add('toast-hiding');
+            setTimeout(function () {
+                if (bubble.parentElement) bubble.parentElement.removeChild(bubble);
+            }, 300);
+        });
+
+        container.appendChild(bubble);
+
+        // Trigger smooth slide-in animation
+        requestAnimationFrame(function () {
+            bubble.classList.add('toast-visible');
+        });
+
+        // Auto dismiss after specified time
+        setTimeout(function () {
+            if (bubble.parentElement) {
+                bubble.classList.remove('toast-visible');
+                bubble.classList.add('toast-hiding');
+                setTimeout(function () {
+                    if (bubble.parentElement) bubble.parentElement.removeChild(bubble);
+                }, 300);
+            }
+        }, duration || 4500);
     }
 
     function esc(s) {
