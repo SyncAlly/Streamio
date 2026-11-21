@@ -37,10 +37,12 @@ header {
     background-color: var(--card-bg);
     border-bottom: 1px solid var(--card-border);
     padding: 0.85rem 2rem;
+    width: 100%;
 }
 
 .header-content {
     max-width: 1200px;
+    width: 100%;
     margin: 0 auto;
     display: flex;
     justify-content: space-between;
@@ -54,18 +56,26 @@ header {
     background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
+    margin: 0;
+    line-height: 1;
 }
 
 .header-indicators {
-    display: flex;
-    align-items: center;
-    gap: 0.65rem;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 0.75rem !important;
+    flex-wrap: nowrap !important;
+    flex-shrink: 0 !important;
+    margin-left: auto !important;
 }
 
 /* Sleek Circular Indicators */
 .indicator-circle {
-    width: 32px;
-    height: 32px;
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    min-height: 32px !important;
     border-radius: 50%;
     background-color: var(--card-bg);
     border: 1px solid var(--card-border);
@@ -76,6 +86,7 @@ header {
     transition: all 0.2s ease;
     cursor: default;
     position: relative;
+    flex-shrink: 0 !important;
 }
 
 .indicator-circle svg {
@@ -138,6 +149,10 @@ main {
 }
 
 @media (max-width: 900px) {
+    header {
+        padding: 0.75rem 1rem;
+    }
+
     main {
         grid-template-columns: 1fr;
         margin: 0 auto;
