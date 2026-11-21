@@ -240,7 +240,9 @@ window.addEventListener('load', function () {
                         });
                     }
 
-                    // Max Graphics: 12 Mbps Bitrate, 60 FPS, Zero Downsampling
+                    // Optimized 1080p Graphics: 4.5 Mbps Bitrate per peer, 60 FPS
+                    // 4.5 Mbps H.264 provides crisp 1080p clarity while keeping total host upload
+                    // under 10 Mbps for 2-3 simultaneous viewers, preventing Wi-Fi upload saturation/bufferbloat.
                     if (pc.getSenders) {
                         pc.getSenders().forEach(function (sender) {
                             if (sender.track && sender.track.kind === 'video') {
@@ -248,12 +250,9 @@ window.addEventListener('load', function () {
                                 if (!params.encodings || params.encodings.length === 0) {
                                     params.encodings = [{}];
                                 }
-                                // Max 12 Mbps: Pristine Blu-ray / source clarity with zero compression blur
-                                params.encodings[0].maxBitrate = 12000000;
-                                // Strictly 1:1 pixel mapping: forbids browser from downscaling
+                                params.encodings[0].maxBitrate = 4500000;
                                 params.encodings[0].scaleResolutionDownBy = 1.0;
-                                // Smooth framerate: keeps 60 FPS buttery smooth
-                                params.degradationPreference = 'maintain-framerate';
+                                params.degradationPreference = 'balanced';
                                 sender.setParameters(params).catch(function () {});
                             }
                         });
