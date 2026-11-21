@@ -6,9 +6,17 @@ window.addEventListener('load', function () {
     const voiceAudio     = document.getElementById('voice-audio');
     const placeholder    = document.getElementById('video-placeholder');
     const placeholderText= document.getElementById('placeholder-text');
+    const routeIndicator = document.getElementById('route-indicator');
+    const wifiIndicator  = document.getElementById('wifi-indicator');
     const statusBadge    = document.getElementById('status-badge');
     const routeBadge     = document.getElementById('route-badge');
     const screenShareBtn = document.getElementById('screen-share-btn');
+
+    // ── SVG Icons for Aligned Indicators ─────────────────────────────────────
+    const SVG_HOUSE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>';
+    const SVG_GLOBE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>';
+    const SVG_WIFI_ON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.86a10 10 0 0 1 14 0"/><path d="M8.5 16.43a5 5 0 0 1 7 0"/></svg>';
+    const SVG_WIFI_OFF = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="2" x2="22" y2="22"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.82"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.61"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>';
     const micBtn         = document.getElementById('mic-btn');
     const speakerBtn     = document.getElementById('speaker-btn');
     const pauseBtn       = document.getElementById('pause-btn');
@@ -327,6 +335,10 @@ window.addEventListener('load', function () {
             routeBadge.classList.add('hidden');
             routeBadge.style.display = 'none';
         }
+        if (routeIndicator) {
+            routeIndicator.classList.add('hidden');
+            routeIndicator.style.display = 'none';
+        }
         updateStatus('Ready to Host', 'badge-offline');
         appendMsg('system', 'You stopped sharing.');
     }
@@ -537,8 +549,23 @@ window.addEventListener('load', function () {
     // Helpers
     // ══════════════════════════════════════════════════════════════════════════
     function updateStatus(text, cls) {
-        statusBadge.textContent = text;
-        statusBadge.className = 'badge ' + cls;
+        if (statusBadge) {
+            statusBadge.textContent = text;
+            statusBadge.className = 'badge ' + cls;
+        }
+        if (wifiIndicator) {
+            const isLive = cls === 'badge-live' || cls === 'badge-connected' ||
+                (text && (text.toLowerCase().includes('live') || text.toLowerCase().includes('watching') || text.toLowerCase().includes('connected')));
+            if (isLive) {
+                wifiIndicator.innerHTML = SVG_WIFI_ON;
+                wifiIndicator.className = 'indicator-circle wifi-live';
+                wifiIndicator.title = text || 'Watching Live';
+            } else {
+                wifiIndicator.innerHTML = SVG_WIFI_OFF;
+                wifiIndicator.className = 'indicator-circle wifi-offline';
+                wifiIndicator.title = text || 'Offline';
+            }
+        }
     }
 
     function appendMsg(type, text, author) {
@@ -634,11 +661,33 @@ window.addEventListener('load', function () {
     }
 
     function updateRouteBadge(text, cls) {
-        if (!routeBadge) return;
-        routeBadge.textContent = text;
-        routeBadge.className = 'badge ' + cls;
-        routeBadge.classList.remove('hidden');
-        routeBadge.style.display = 'inline-block';
+        if (routeBadge) {
+            routeBadge.textContent = text;
+            routeBadge.className = 'badge ' + cls;
+            routeBadge.classList.remove('hidden');
+            routeBadge.style.display = 'inline-block';
+        }
+        if (routeIndicator) {
+            const isTailscale = cls === 'badge-tailscale' || (text && text.toLowerCase().includes('tailscale'));
+            if (isTailscale) {
+                // Blue globe icon for Tailscale
+                routeIndicator.innerHTML = SVG_GLOBE;
+                routeIndicator.className = 'indicator-circle route-tailscale';
+                routeIndicator.title = 'Tailscale Direct (100.x)';
+                routeIndicator.classList.remove('hidden');
+                routeIndicator.style.display = 'flex';
+            } else if (text) {
+                // Blue house icon for Direct Internet / LAN
+                routeIndicator.innerHTML = SVG_HOUSE;
+                routeIndicator.className = 'indicator-circle route-direct';
+                routeIndicator.title = text.toLowerCase().includes('lan') ? 'Local Wi-Fi (LAN)' : 'Direct Internet';
+                routeIndicator.classList.remove('hidden');
+                routeIndicator.style.display = 'flex';
+            } else {
+                routeIndicator.classList.add('hidden');
+                routeIndicator.style.display = 'none';
+            }
+        }
     }
 
     // ── Floating Toast Bubble Notification System ─────────────────────────────

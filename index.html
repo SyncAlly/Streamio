@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Movie Watcher - Live Watch Party</title>
+    <title>Streamio - Live Watch Party</title>
     <link rel="stylesheet" href="styles.css">
     <!-- PeerJS for WebRTC Peer-to-Peer streaming across the internet -->
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -11,17 +11,23 @@
 <body>
     <header>
         <div class="header-content">
-            <h1>🎬 Movie Watcher</h1>
-            <div class="badges-wrap">
-                <span id="route-badge" class="badge badge-route hidden">⚡ Route: Detecting…</span>
-                <span id="status-badge" class="badge badge-offline">Offline</span>
-            </div>
+            <h1>Streamio</h1>
         </div>
     </header>
 
     <main>
         <!-- Left Column: Video & Controls -->
         <section id="stage">
+            <!-- Stage Top Bar: Indicators aligned above the video player -->
+            <div class="stage-top-bar">
+                <div class="indicators-wrap">
+                    <!-- Connection Type: Small circle with blue house (Direct Internet) or blue globe (Tailscale) -->
+                    <div id="route-indicator" class="indicator-circle hidden" title="Connection: Detecting"></div>
+                    <!-- Live Status: Full Wi-Fi when watching live/connected, crossed-out Wi-Fi when offline -->
+                    <div id="wifi-indicator" class="indicator-circle wifi-offline" title="Offline"></div>
+                </div>
+            </div>
+
             <div id="video-container">
                 <video id="video-player" playsinline autoplay muted></video>
                 <div id="video-placeholder">
@@ -61,7 +67,7 @@
                 <h3>💬 Live Chat</h3>
             </div>
             <ul id="messages" class="messages-list">
-                <li class="system-msg">Welcome to Movie Watcher! Start sharing or join via room link.</li>
+                <li class="system-msg">Welcome to Streamio! Start sharing or join via room link.</li>
             </ul>
             <form id="chat-form" class="chat-form">
                 <input id="message-input" type="text" placeholder="Type a message..." autocomplete="off">
@@ -71,7 +77,7 @@
     </main>
 
     <footer>
-        <p>Movie Watcher &bull; Real-Time P2P WebRTC Video &amp; Voice Streaming</p>
+        <p>Streamio &bull; Real-Time P2P WebRTC Video &amp; Voice Streaming</p>
     </footer>
 
     <!-- Floating Toast Notification Bubble Container (Bottom-Left) -->
