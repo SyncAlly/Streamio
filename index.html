@@ -12,22 +12,18 @@
     <header>
         <div class="header-content">
             <h1>Streamio</h1>
+            <div class="header-indicators">
+                <!-- Connection Type: Small circle with blue house (Direct Internet) or blue globe (Tailscale) -->
+                <div id="route-indicator" class="indicator-circle hidden" title="Connection: Detecting"></div>
+                <!-- Live Status: Full Wi-Fi when watching live/connected, crossed-out Wi-Fi when offline -->
+                <div id="wifi-indicator" class="indicator-circle wifi-offline" title="Offline"></div>
+            </div>
         </div>
     </header>
 
     <main>
         <!-- Left Column: Video & Controls -->
         <section id="stage">
-            <!-- Stage Top Bar: Indicators aligned above the video player -->
-            <div class="stage-top-bar">
-                <div class="indicators-wrap">
-                    <!-- Connection Type: Small circle with blue house (Direct Internet) or blue globe (Tailscale) -->
-                    <div id="route-indicator" class="indicator-circle hidden" title="Connection: Detecting"></div>
-                    <!-- Live Status: Full Wi-Fi when watching live/connected, crossed-out Wi-Fi when offline -->
-                    <div id="wifi-indicator" class="indicator-circle wifi-offline" title="Offline"></div>
-                </div>
-            </div>
-
             <div id="video-container">
                 <video id="video-player" playsinline autoplay muted></video>
                 <div id="video-placeholder">
