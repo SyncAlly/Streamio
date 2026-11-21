@@ -42,35 +42,54 @@ window.addEventListener('load', function () {
     const messagesList   = document.getElementById('messages');
     const userNameInput  = document.getElementById('user-name-input');
 
-    // ── High-Speed STUN + Global Authenticated TURN Relay ─────────────────────
-    // Guaranteed WebRTC connection across all networks, VPNs, mobile cellular, and firewalls
+    // ── STUN + TURN Relay for all networks ───────────────────────────────────
+    // Multiple STUN servers for direct connections; TURN relay as fallback for
+    // devices that can't reach each other directly (different routers, mobile data).
+    // For devices on the same router, local LAN host candidates are preferred.
     const PEER_OPTIONS = {
         config: {
             iceServers: [
-                // Fast Google & Cloudflare STUN
+                // Multiple STUN servers (discover public IP for cross-router connections)
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
                 { urls: 'stun:stun.cloudflare.com:3478' },
-                { urls: 'stun:global.relay.metered.ca:80' },
-                // Metered Global TURN Relay (UDP)
+                // OpenRelay TURN (free, no account required - reliable fallback)
+                {
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:443',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                // Metered TURN (authenticated backup)
                 {
                     urls: 'turn:global.relay.metered.ca:80',
                     username: '82aad90822871c83531a3ced',
                     credential: '79aMgXZS4xge8k0H'
                 },
-                // Metered Global TURN Relay (TCP - punches through home routers and NAT)
                 {
                     urls: 'turn:global.relay.metered.ca:80?transport=tcp',
                     username: '82aad90822871c83531a3ced',
                     credential: '79aMgXZS4xge8k0H'
                 },
-                // Metered Global TURNS Relay (TLS 443 - punches through all VPNs & mobile carriers)
                 {
                     urls: 'turns:global.relay.metered.ca:443?transport=tcp',
                     username: '82aad90822871c83531a3ced',
                     credential: '79aMgXZS4xge8k0H'
                 }
-            ]
+            ],
+            // Allow ALL candidate types: host (LAN), srflx (STUN), relay (TURN)
+            iceTransportPolicy: 'all'
         }
     };
 
@@ -88,42 +107,56 @@ window.addEventListener('load', function () {
     let mySenderName     = savedName || 'Friend';
 
     // ── Multi-Network WebRTC Engine (Tailscale + Local Wi-Fi LAN + STUN/TURN) ──
+    // Host IP constants (viewer side will use these to resolve mDNS .local addresses)
     const TAILSCALE_HOST_IP = '100.109.86.125';
     let LAN_HOST_IP         = '192.168.100.35';
 
     (function patchRTCForMultiNetwork() {
         if (typeof RTCPeerConnection === 'undefined') return;
 
-        // 1. Intercept addIceCandidate: NEVER drop candidates; expand .local into real IPs
+        // Helper: build a resolved ICE candidate string from a .local candidate
+        function resolveMdns(str, realIp, suffix) {
+            var resolved = str.replace(/[a-f0-9-]{8,}\.local/gi, realIp);
+            if (suffix) {
+                // Give it a unique foundation ID so browsers treat it as a separate candidate
+                resolved = resolved.replace(/^(candidate:\S+)/, '$1' + suffix);
+            }
+            return resolved;
+        }
+
+        // 1. addIceCandidate: when viewer receives a .local candidate from host,
+        //    inject both real IP versions (Tailscale + LAN). Drop the .local original
+        //    since the viewer's browser cannot resolve it.
         var _origAdd = RTCPeerConnection.prototype.addIceCandidate;
         RTCPeerConnection.prototype.addIceCandidate = function (candidate) {
-            if (candidate && candidate.candidate) {
+            if (candidate && candidate.candidate && candidate.candidate.indexOf('.local') !== -1) {
                 var c = candidate.candidate;
-                // If candidate is masked with mDNS .local, try real Tailscale and LAN IPs
-                if (c.indexOf('.local') !== -1) {
-                    var tsStr = c.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
-                    try {
-                        _origAdd.call(this, new RTCIceCandidate({
-                            candidate: tsStr,
-                            sdpMid: candidate.sdpMid,
-                            sdpMLineIndex: candidate.sdpMLineIndex
-                        })).catch(function () {});
-                    } catch (e) {}
+                var sdpMid = candidate.sdpMid;
+                var sdpIdx = candidate.sdpMLineIndex;
 
-                    var lanStr = c.replace(/[a-f0-9-]+\.local/gi, LAN_HOST_IP).replace(/^candidate:(\S+)/, 'candidate:$1lan');
-                    try {
-                        _origAdd.call(this, new RTCIceCandidate({
-                            candidate: lanStr,
-                            sdpMid: candidate.sdpMid,
-                            sdpMLineIndex: candidate.sdpMLineIndex
-                        })).catch(function () {});
-                    } catch (e) {}
-                }
+                // Inject Tailscale IP version
+                try {
+                    _origAdd.call(this, new RTCIceCandidate({
+                        candidate: resolveMdns(c, TAILSCALE_HOST_IP, 'ts'),
+                        sdpMid: sdpMid, sdpMLineIndex: sdpIdx
+                    })).catch(function () {});
+                } catch (e) {}
+
+                // Inject LAN IP version
+                try {
+                    _origAdd.call(this, new RTCIceCandidate({
+                        candidate: resolveMdns(c, LAN_HOST_IP, 'lan'),
+                        sdpMid: sdpMid, sdpMLineIndex: sdpIdx
+                    })).catch(function () {});
+                } catch (e) {}
+
+                // Drop the unresolvable .local — don't pass through
+                return Promise.resolve();
             }
             return _origAdd.apply(this, arguments);
         };
 
-        // 2. Intercept setRemoteDescription: Preserve ALL candidates (LAN, Tailscale, STUN)
+        // 2. setRemoteDescription: expand any .local candidates in SDP
         var _origSetRemote = RTCPeerConnection.prototype.setRemoteDescription;
         RTCPeerConnection.prototype.setRemoteDescription = function (desc) {
             if (desc && typeof desc.sdp === 'string') {
@@ -131,11 +164,12 @@ window.addEventListener('load', function () {
                 var expanded = [];
                 for (var i = 0; i < lines.length; i++) {
                     var l = lines[i];
-                    expanded.push(l);
-                    // If SDP has an mDNS candidate line, also inject Tailscale & LAN IP versions
                     if (l.startsWith('a=candidate:') && l.indexOf('.local') !== -1) {
-                        expanded.push(l.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP));
-                        expanded.push(l.replace(/[a-f0-9-]+\.local/gi, LAN_HOST_IP).replace(/^a=candidate:(\S+)/, 'a=candidate:$1lan'));
+                        // Replace .local with both Tailscale and LAN IPs; skip the .local line
+                        expanded.push(l.replace(/[a-f0-9-]{8,}\.local/gi, TAILSCALE_HOST_IP).replace(/^(a=candidate:\S+)/, '$1ts'));
+                        expanded.push(l.replace(/[a-f0-9-]{8,}\.local/gi, LAN_HOST_IP).replace(/^(a=candidate:\S+)/, '$1lan'));
+                    } else {
+                        expanded.push(l);
                     }
                 }
                 desc = { type: desc.type, sdp: expanded.join('\r\n') };
@@ -143,26 +177,7 @@ window.addEventListener('load', function () {
             return _origSetRemote.apply(this, [desc]);
         };
 
-        // 3. Intercept setLocalDescription: Expand .local candidates on host offer/answer
-        var _origSetLocal = RTCPeerConnection.prototype.setLocalDescription;
-        RTCPeerConnection.prototype.setLocalDescription = function (desc) {
-            if (desc && typeof desc.sdp === 'string') {
-                var lines = desc.sdp.split('\r\n');
-                var expanded = [];
-                for (var i = 0; i < lines.length; i++) {
-                    var l = lines[i];
-                    expanded.push(l);
-                    if (l.startsWith('a=candidate:') && l.indexOf('.local') !== -1) {
-                        expanded.push(l.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP));
-                        expanded.push(l.replace(/[a-f0-9-]+\.local/gi, LAN_HOST_IP).replace(/^a=candidate:(\S+)/, 'a=candidate:$1lan'));
-                    }
-                }
-                desc = { type: desc.type, sdp: expanded.join('\r\n') };
-            }
-            return _origSetLocal.apply(this, [desc]);
-        };
-
-        // 4. Intercept onicecandidate setter: Host advertises Tailscale IP, LAN IP, and STUN
+        // 3. onicecandidate setter: host side — emit Tailscale + LAN candidates instead of .local
         var descProp = Object.getOwnPropertyDescriptor(RTCPeerConnection.prototype, 'onicecandidate');
         if (descProp && descProp.set) {
             var _origSetOnIce = descProp.set;
@@ -170,44 +185,46 @@ window.addEventListener('load', function () {
                 set: function (fn) {
                     if (typeof fn !== 'function') return _origSetOnIce.call(this, fn);
                     var wrapped = function (evt) {
-                        if (evt && evt.candidate && evt.candidate.candidate) {
-                            var str = evt.candidate.candidate;
-                            // Dynamically update host LAN IP if Chrome reveals a real LAN IP
-                            var lanMatch = str.match(/\b(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)\b/);
-                            if (lanMatch && lanMatch[1]) {
-                                LAN_HOST_IP = lanMatch[1];
-                            }
-
-                            // If Chrome masks host candidate behind .local, emit BOTH Tailscale and LAN candidates!
-                            if (isHost && str.indexOf('.local') !== -1) {
-                                // 1. Tailscale candidate
-                                var tsStr = str.replace(/[a-f0-9-]+\.local/gi, TAILSCALE_HOST_IP);
-                                try {
-                                    var tsEvt = {
-                                        candidate: new RTCIceCandidate({
-                                            candidate: tsStr,
-                                            sdpMid: evt.candidate.sdpMid,
-                                            sdpMLineIndex: evt.candidate.sdpMLineIndex
-                                        })
-                                    };
-                                    fn.call(this, tsEvt);
-                                } catch (e) {}
-
-                                // 2. Local Wi-Fi (LAN) candidate
-                                var lanStr = str.replace(/[a-f0-9-]+\.local/gi, LAN_HOST_IP).replace(/^candidate:(\S+)/, 'candidate:$1lan');
-                                try {
-                                    var lanEvt = {
-                                        candidate: new RTCIceCandidate({
-                                            candidate: lanStr,
-                                            sdpMid: evt.candidate.sdpMid,
-                                            sdpMLineIndex: evt.candidate.sdpMLineIndex
-                                        })
-                                    };
-                                    fn.call(this, lanEvt);
-                                } catch (e) {}
-                                return;
-                            }
+                        if (!evt || !evt.candidate || !evt.candidate.candidate) {
+                            return fn.apply(this, arguments); // null candidate = end-of-candidates, pass through
                         }
+                        var str = evt.candidate.candidate;
+                        var sdpMid = evt.candidate.sdpMid;
+                        var sdpIdx = evt.candidate.sdpMLineIndex;
+
+                        // Discover actual LAN IP if Chrome exposes a real private IP
+                        var lanMatch = str.match(/\b(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/);
+                        if (lanMatch && lanMatch[1]) {
+                            LAN_HOST_IP = lanMatch[1];
+                        }
+
+                        // On host: when Chrome masks the IP with mDNS .local, emit real IP candidates
+                        if (isHost && str.indexOf('.local') !== -1) {
+                            // Tailscale candidate
+                            try {
+                                fn.call(this, {
+                                    candidate: new RTCIceCandidate({
+                                        candidate: resolveMdns(str, TAILSCALE_HOST_IP, 'ts'),
+                                        sdpMid: sdpMid, sdpMLineIndex: sdpIdx
+                                    })
+                                });
+                            } catch (e) {}
+
+                            // LAN candidate
+                            try {
+                                fn.call(this, {
+                                    candidate: new RTCIceCandidate({
+                                        candidate: resolveMdns(str, LAN_HOST_IP, 'lan'),
+                                        sdpMid: sdpMid, sdpMLineIndex: sdpIdx
+                                    })
+                                });
+                            } catch (e) {}
+
+                            // Don't emit the unresolvable .local candidate
+                            return;
+                        }
+
+                        // All other candidates (srflx STUN, relay TURN, real host IPs) pass through
                         return fn.apply(this, arguments);
                     };
                     return _origSetOnIce.call(this, wrapped);
