@@ -331,7 +331,18 @@ window.addEventListener('load', function () {
                 conn.send({ type: 'assign-name', name: 'Friend ' + viewerCounter });
                 updateStatus('Live • Friend Connected', 'badge-connected');
                 if (localStream) callPeerWithStream(conn.peer, localStream, 'screen');
-                if (localMicStream) callPeerWithStream(conn.peer, localMicStream, 'voice');
+
+                // Establish room voice mix to the new viewer
+                const outgoingMix = getOrCreateMixForPeer(conn.peer);
+                const voiceCall = peer.call(conn.peer, outgoingMix, { metadata: { type: 'voice' } });
+                if (voiceCall) {
+                    voiceCall.on('stream', function (stream) {
+                        addPeerVoiceToMixer(conn.peer, stream);
+                    });
+                }
+            });
+            conn.on('close', function () {
+                removePeerVoiceFromMixer(conn.peer);
             });
         });
 
@@ -415,17 +426,145 @@ window.addEventListener('load', function () {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // Web Audio Mix-Minus Group Voice Engine (Host MCU Hub)
+    // ══════════════════════════════════════════════════════════════════════════
+    let audioCtx = null;
+    let hostMicSourceNode = null;
+    const peerVoiceEntries = new Map(); // peerId -> { sourceNode, destinationNode, stream }
+
+    function getAudioContext() {
+        if (!audioCtx) {
+            const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+            if (AudioCtxClass) audioCtx = new AudioCtxClass();
+        }
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(function () {});
+        }
+        return audioCtx;
+    }
+
+    // Unlocks browser audio on first user interaction anywhere
+    window.addEventListener('click', function () { getAudioContext(); }, { once: true });
+    window.addEventListener('touchstart', function () { getAudioContext(); }, { once: true, passive: true });
+
+    // Returns a personalized audio stream for a specific viewer containing everyone ELSE's voice
+    function getOrCreateMixForPeer(peerId) {
+        if (!isHost) return (localMicStream || undefined);
+        const ctx = getAudioContext();
+        if (!ctx) return (localMicStream || undefined);
+
+        let entry = peerVoiceEntries.get(peerId);
+        if (!entry) {
+            const dest = ctx.createMediaStreamDestination();
+            entry = { sourceNode: null, destinationNode: dest, stream: null };
+            peerVoiceEntries.set(peerId, entry);
+
+            // Connect host microphone to this peer if host mic is active
+            if (hostMicSourceNode) {
+                try { hostMicSourceNode.connect(dest); } catch (e) {}
+            }
+
+            // Connect all OTHER existing viewers' voices into this viewer's mix
+            peerVoiceEntries.forEach(function (otherEntry, otherId) {
+                if (otherId !== peerId && otherEntry.sourceNode) {
+                    try { otherEntry.sourceNode.connect(dest); } catch (e) {}
+                }
+            });
+        }
+        return entry.destinationNode.stream;
+    }
+
+    // Connects an incoming viewer's voice stream into the host speaker and all other viewers' mixes
+    function addPeerVoiceToMixer(peerId, stream) {
+        if (!isHost || !stream) return;
+        const ctx = getAudioContext();
+        if (!ctx) return;
+
+        let entry = peerVoiceEntries.get(peerId);
+        if (!entry) {
+            const dest = ctx.createMediaStreamDestination();
+            entry = { sourceNode: null, destinationNode: dest, stream: null };
+            peerVoiceEntries.set(peerId, entry);
+        }
+
+        if (entry.sourceNode) {
+            try { entry.sourceNode.disconnect(); } catch (e) {}
+        }
+
+        try {
+            entry.stream = stream;
+            entry.sourceNode = ctx.createMediaStreamSource(stream);
+
+            // 1. Play out of Host's speakers/headphones
+            entry.sourceNode.connect(ctx.destination);
+
+            // 2. Mix into all OTHER viewers' audio streams (mix-minus: never back to themselves)
+            peerVoiceEntries.forEach(function (otherEntry, otherId) {
+                if (otherId !== peerId && otherEntry.destinationNode) {
+                    try { entry.sourceNode.connect(otherEntry.destinationNode); } catch (e) {}
+                }
+            });
+        } catch (e) {}
+    }
+
+    // Cleans up a peer's audio nodes when they leave
+    function removePeerVoiceFromMixer(peerId) {
+        const entry = peerVoiceEntries.get(peerId);
+        if (entry) {
+            if (entry.sourceNode) {
+                try { entry.sourceNode.disconnect(); } catch (e) {}
+            }
+            peerVoiceEntries.delete(peerId);
+        }
+    }
+
+    // Connects the host's local microphone into every viewer's mix destination
+    function hookHostMicToMixer() {
+        if (!isHost || !localMicStream) return;
+        const ctx = getAudioContext();
+        if (!ctx) return;
+
+        if (hostMicSourceNode) {
+            try { hostMicSourceNode.disconnect(); } catch (e) {}
+            hostMicSourceNode = null;
+        }
+
+        try {
+            hostMicSourceNode = ctx.createMediaStreamSource(localMicStream);
+            peerVoiceEntries.forEach(function (entry) {
+                if (entry.destinationNode) {
+                    try { hostMicSourceNode.connect(entry.destinationNode); } catch (e) {}
+                }
+            });
+        } catch (e) {}
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // 3. Incoming call handler (screen stream OR voice stream)
     // ══════════════════════════════════════════════════════════════════════════
     function handleCall(call) {
         var type = (call.metadata && call.metadata.type) || 'screen';
 
         if (type === 'voice') {
-            call.answer(localMicStream || undefined);
-            call.on('stream', function (stream) {
-                voiceAudio.srcObject = stream;
-                voiceAudio.play().catch(function () {});
-            });
+            const callerId = call.peer;
+            if (isHost) {
+                // Host answers with this peer's personalized mix-minus stream
+                const outgoingMix = getOrCreateMixForPeer(callerId);
+                call.answer(outgoingMix);
+                call.on('stream', function (stream) {
+                    addPeerVoiceToMixer(callerId, stream);
+                });
+                call.on('close', function () {
+                    removePeerVoiceFromMixer(callerId);
+                });
+            } else {
+                // Viewer answers with local mic (if already granted) and receives the room mix
+                call.answer(localMicStream || undefined);
+                call.on('stream', function (stream) {
+                    voiceAudio.srcObject = stream;
+                    voiceAudio.play().catch(function () {});
+                });
+            }
         } else {
             call.answer();
             monitorRoute(call);
@@ -471,9 +610,10 @@ window.addEventListener('load', function () {
     });
 
     // ══════════════════════════════════════════════════════════════════════════
-    // 4. Microphone (2-way voice chat)
+    // 4. Microphone (Full Group Voice Chat)
     // ══════════════════════════════════════════════════════════════════════════
     micBtn.addEventListener('click', async function () {
+        getAudioContext();
         if (!localMicStream) {
             try {
                 localMicStream = await navigator.mediaDevices.getUserMedia({
@@ -484,14 +624,38 @@ window.addEventListener('load', function () {
                 micTrack.enabled = true;
                 micBtn.textContent = 'Mic: On (Talking)';
                 micBtn.className = 'btn btn-success';
-                connectedPeers.forEach(function (pid) {
-                    peer.call(pid, localMicStream, { metadata: { type: 'voice' } });
-                });
+
+                if (isHost) {
+                    // Hook host mic into the mixer for all connected viewers
+                    hookHostMicToMixer();
+                    // Call any peers not yet connected in voice
+                    connectedPeers.forEach(function (pid) {
+                        const outgoingMix = getOrCreateMixForPeer(pid);
+                        const c = peer.call(pid, outgoingMix, { metadata: { type: 'voice' } });
+                        if (c) {
+                            c.on('stream', function (stream) {
+                                addPeerVoiceToMixer(pid, stream);
+                            });
+                        }
+                    });
+                } else {
+                    // Viewer calls Host with their mic stream
+                    if (roomId) {
+                        const voiceCall = peer.call(roomId, localMicStream, { metadata: { type: 'voice' } });
+                        if (voiceCall) {
+                            voiceCall.on('stream', function (stream) {
+                                voiceAudio.srcObject = stream;
+                                voiceAudio.play().catch(function () {});
+                            });
+                        }
+                    }
+                }
             } catch (e) {
                 alert('Microphone permission denied.');
             }
             return;
         }
+
         micTrack.enabled = !micTrack.enabled;
         if (micTrack.enabled) {
             micBtn.textContent = 'Mic: On (Talking)';
