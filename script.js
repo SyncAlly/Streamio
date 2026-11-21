@@ -295,7 +295,6 @@ window.addEventListener('load', function () {
                 routeBadge.classList.remove('hidden');
                 routeBadge.style.display = 'inline-block';
             }
-            appendMsg('system', 'Room ready! Share the link below with your friend.');
         });
 
         peer.on('connection', function (conn) {
@@ -303,7 +302,6 @@ window.addEventListener('load', function () {
             monitorRoute(conn);
             conn.on('open', function () {
                 connectedPeers.add(conn.peer);
-                appendMsg('system', 'Your friend joined!');
                 updateStatus('Live • Friend Connected', 'badge-connected');
                 if (localStream) callPeerWithStream(conn.peer, localStream, 'screen');
                 if (localMicStream) callPeerWithStream(conn.peer, localMicStream, 'voice');
@@ -354,7 +352,6 @@ window.addEventListener('load', function () {
         peer = new Peer(undefined, PEER_OPTIONS);
 
         peer.on('open', function () {
-            appendMsg('system', 'Connecting to room ' + hostId + '…');
             var conn = peer.connect(hostId, { reliable: true });
             setupChat(conn);
             monitorRoute(conn);
@@ -363,13 +360,11 @@ window.addEventListener('load', function () {
                 connectedPeers.add(hostId);
                 updateStatus('Connected to Host', 'badge-connected');
                 placeholderText.textContent = 'Waiting for host to share screen…';
-                appendMsg('system', 'Connected! Waiting for the host to share their screen.');
             });
 
             conn.on('close', function () {
                 connectedPeers.delete(hostId);
                 updateStatus('Host Disconnected', 'badge-offline');
-                appendMsg('system', 'Host disconnected.');
             });
         });
 
@@ -377,14 +372,12 @@ window.addEventListener('load', function () {
 
         peer.on('error', function (err) {
             updateStatus('Error — Retrying…', 'badge-offline');
-            appendMsg('system', 'Connection problem (' + err.type + '), retrying in 6 s…');
             setTimeout(function () { startViewer(hostId); }, 6000);
         });
 
         // Auto-retry after 20 s if still not connected
         setTimeout(function () {
             if (!connectedPeers.has(hostId)) {
-                appendMsg('system', 'Still connecting — retrying automatically…');
                 startViewer(hostId);
             }
         }, 20000);
@@ -401,7 +394,6 @@ window.addEventListener('load', function () {
             call.on('stream', function (stream) {
                 voiceAudio.srcObject = stream;
                 voiceAudio.play().catch(function () {});
-                appendMsg('system', '🎙️ Voice chat connected.');
             });
         } else {
             call.answer();
@@ -425,7 +417,6 @@ window.addEventListener('load', function () {
                 videoPlayer.play().then(function () {
                     placeholder.classList.add('hidden');
                     updateStatus('Watching Live', 'badge-live');
-                    appendMsg('system', '🎬 Receiving stream! Click the video to unmute.');
                 }).catch(function () {
                     placeholderText.textContent = 'Click here to play';
                 });
