@@ -135,12 +135,16 @@ window.addEventListener('load', function () {
         }
     }
 
-    // ── Multi-Network WebRTC Engine (Tailscale + Local Wi-Fi LAN + STUN/TURN) ──
+    // ── Pure Tailscale WebRTC Engine (100.x.x.x Only) ─────────────────────────
     const TAILSCALE_HOST_IP = '100.109.86.125';
-    let LAN_HOST_IP         = '192.168.100.35';
 
-    (function patchRTCForMultiNetwork() {
+    (function patchRTCForTailscaleOnly() {
         if (typeof RTCPeerConnection === 'undefined') return;
+
+        // Helper: check if candidate string contains a Tailscale 100.x IP
+        function isTailscaleCandidate(str) {
+            return /\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/.test(str);
+        }
 
         // Helper: build a resolved ICE candidate string from a .local candidate
         function resolveMdns(str, realIp, suffix) {
@@ -151,57 +155,64 @@ window.addEventListener('load', function () {
             return resolved;
         }
 
-        // 1. addIceCandidate: ONLY on viewer when viewer receives a .local candidate from host.
-        //    Host must NEVER overwrite the viewer's candidates with its own IP!
+        // 1. addIceCandidate: Only accept Tailscale (100.x) candidates
         var _origAdd = RTCPeerConnection.prototype.addIceCandidate;
         RTCPeerConnection.prototype.addIceCandidate = function (candidate) {
-            if (!isHost && candidate && candidate.candidate && candidate.candidate.indexOf('.local') !== -1) {
-                var c = candidate.candidate;
-                var sdpMid = candidate.sdpMid;
-                var sdpIdx = candidate.sdpMLineIndex;
+            if (!candidate || !candidate.candidate) {
+                return _origAdd.apply(this, arguments);
+            }
 
-                // Inject Tailscale IP version
+            var c = candidate.candidate;
+            var sdpMid = candidate.sdpMid;
+            var sdpIdx = candidate.sdpMLineIndex;
+
+            // When viewer receives a .local candidate from host, resolve directly to Tailscale Host IP
+            if (!isHost && c.indexOf('.local') !== -1) {
                 try {
-                    _origAdd.call(this, new RTCIceCandidate({
+                    return _origAdd.call(this, new RTCIceCandidate({
                         candidate: resolveMdns(c, TAILSCALE_HOST_IP, 'ts'),
                         sdpMid: sdpMid, sdpMLineIndex: sdpIdx
                     })).catch(function () {});
-                } catch (e) {}
-
-                // Inject LAN IP version
-                try {
-                    _origAdd.call(this, new RTCIceCandidate({
-                        candidate: resolveMdns(c, LAN_HOST_IP, 'lan'),
-                        sdpMid: sdpMid, sdpMLineIndex: sdpIdx
-                    })).catch(function () {});
-                } catch (e) {}
-
-                return _origAdd.apply(this, arguments).catch(function () {});
+                } catch (e) {
+                    return Promise.resolve();
+                }
             }
+
+            // Drop all non-Tailscale candidates (LAN, STUN/srflx, TURN/relay)
+            if (!isTailscaleCandidate(c)) {
+                return Promise.resolve();
+            }
+
             return _origAdd.apply(this, arguments);
         };
 
-        // 2. setRemoteDescription: ONLY on viewer when receiving host SDP with .local.
-        //    Host must NEVER overwrite the viewer's remote description SDP!
+        // 2. setRemoteDescription: Filter SDP to keep ONLY Tailscale candidate lines
         var _origSetRemote = RTCPeerConnection.prototype.setRemoteDescription;
         RTCPeerConnection.prototype.setRemoteDescription = function (desc) {
-            if (!isHost && desc && typeof desc.sdp === 'string') {
+            if (desc && typeof desc.sdp === 'string') {
                 var lines = desc.sdp.split('\r\n');
-                var expanded = [];
+                var filtered = [];
                 for (var i = 0; i < lines.length; i++) {
                     var l = lines[i];
-                    expanded.push(l);
-                    if (l.startsWith('a=candidate:') && l.indexOf('.local') !== -1) {
-                        expanded.push(l.replace(/\S+\.local/gi, TAILSCALE_HOST_IP).replace(/^(a=candidate:\S+)/, '$1ts'));
-                        expanded.push(l.replace(/\S+\.local/gi, LAN_HOST_IP).replace(/^(a=candidate:\S+)/, '$1lan'));
+                    if (l.startsWith('a=candidate:')) {
+                        // Resolve host .local to Tailscale Host IP for viewers
+                        if (!isHost && l.indexOf('.local') !== -1) {
+                            filtered.push(l.replace(/\S+\.local/gi, TAILSCALE_HOST_IP).replace(/^(a=candidate:\S+)/, '$1ts'));
+                            continue;
+                        }
+                        // Drop any candidate line that is not Tailscale (100.x)
+                        if (!isTailscaleCandidate(l)) {
+                            continue;
+                        }
                     }
+                    filtered.push(l);
                 }
-                desc = { type: desc.type, sdp: expanded.join('\r\n') };
+                desc = { type: desc.type, sdp: filtered.join('\r\n') };
             }
             return _origSetRemote.apply(this, [desc]);
         };
 
-        // 3. onicecandidate setter: Host advertises Tailscale IP, LAN IP, and STUN/TURN
+        // 3. onicecandidate setter: Host and Viewer only emit Tailscale candidates
         var descProp = Object.getOwnPropertyDescriptor(RTCPeerConnection.prototype, 'onicecandidate');
         if (descProp && descProp.set) {
             var _origSetOnIce = descProp.set;
@@ -209,21 +220,16 @@ window.addEventListener('load', function () {
                 set: function (fn) {
                     if (typeof fn !== 'function') return _origSetOnIce.call(this, fn);
                     var wrapped = function (evt) {
+                        // Null candidate = end of candidates, must pass through
                         if (!evt || !evt.candidate || !evt.candidate.candidate) {
-                            return fn.apply(this, arguments); // null candidate = end of candidates
+                            return fn.apply(this, arguments);
                         }
                         var str = evt.candidate.candidate;
                         var sdpMid = evt.candidate.sdpMid;
                         var sdpIdx = evt.candidate.sdpMLineIndex;
 
-                        var lanMatch = str.match(/\b(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/);
-                        if (lanMatch && lanMatch[1]) {
-                            LAN_HOST_IP = lanMatch[1];
-                        }
-
-                        // On host: when Chrome masks host candidate with mDNS .local, emit real IP candidates!
+                        // On host: when Chrome masks host IP with .local, emit real Tailscale candidate
                         if (isHost && str.indexOf('.local') !== -1) {
-                            // 1. Tailscale candidate
                             try {
                                 fn.call(this, {
                                     candidate: new RTCIceCandidate({
@@ -232,17 +238,11 @@ window.addEventListener('load', function () {
                                     })
                                 });
                             } catch (e) {}
+                            return;
+                        }
 
-                            // 2. Local Wi-Fi (LAN) candidate
-                            try {
-                                fn.call(this, {
-                                    candidate: new RTCIceCandidate({
-                                        candidate: resolveMdns(str, LAN_HOST_IP, 'lan'),
-                                        sdpMid: sdpMid, sdpMLineIndex: sdpIdx
-                                    })
-                                });
-                            } catch (e) {}
-
+                        // Drop any candidate that is not a Tailscale 100.x IP
+                        if (!isTailscaleCandidate(str)) {
                             return;
                         }
 
