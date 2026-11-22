@@ -293,13 +293,13 @@ window.addEventListener('load', function () {
         if (localStream) { stopShare(); return; }
 
         try {
-            // Max 1080p, Full 60 FPS (Silky smooth motion on high-refresh phone & laptop screens)
+            // Max 1080p, 30 FPS (Optimized for cinema & movie streaming; 24 FPS native playback)
             localStream = await navigator.mediaDevices.getDisplayMedia({
                 video: {
                     cursor: 'always',
                     width: { ideal: 1920, max: 1920 },
                     height: { ideal: 1080, max: 1080 },
-                    frameRate: { ideal: 60, max: 60 }
+                    frameRate: { ideal: 30, max: 30 }
                 },
                 audio: true
             });
@@ -361,9 +361,9 @@ window.addEventListener('load', function () {
                         });
                     }
 
-                    // Optimized 1080p Graphics: 4.5 Mbps Bitrate per peer, 60 FPS
-                    // 4.5 Mbps H.264 provides crisp 1080p clarity while keeping total host upload
-                    // under 10 Mbps for 2-3 simultaneous viewers, preventing Wi-Fi upload saturation/bufferbloat.
+                    // Optimized 1080p Graphics: 2.5 Mbps Bitrate per peer, 30 FPS
+                    // 2.5 Mbps H.264 delivers full 1080p clarity for 24-30 FPS movies while
+                    // saving ~45% bandwidth and fitting comfortably within 8-10 Mbps/cellular connections.
                     if (pc.getSenders) {
                         pc.getSenders().forEach(function (sender) {
                             if (sender.track && sender.track.kind === 'video') {
@@ -371,7 +371,7 @@ window.addEventListener('load', function () {
                                 if (!params.encodings || params.encodings.length === 0) {
                                     params.encodings = [{}];
                                 }
-                                params.encodings[0].maxBitrate = 4500000;
+                                params.encodings[0].maxBitrate = 2500000;
                                 params.encodings[0].scaleResolutionDownBy = 1.0;
                                 params.degradationPreference = 'balanced';
                                 sender.setParameters(params).catch(function () {});
