@@ -386,6 +386,11 @@ window.addEventListener('load', function () {
             if (call.peerConnection) {
                 call.peerConnection.addEventListener('connectionstatechange', enforceHighQuality);
             }
+            // Periodic re-enforcement: GCC can silently drift bitrate down after congestion.
+            // Re-applying params every 30s forces it back to 2.5 Mbps without needing a new peer to join.
+            var qualityInterval = setInterval(enforceHighQuality, 30000);
+            call.on('close', function () { clearInterval(qualityInterval); });
+            call.on('error', function () { clearInterval(qualityInterval); });
         }
         return call;
     }
