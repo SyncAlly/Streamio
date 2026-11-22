@@ -7,7 +7,6 @@ window.addEventListener('load', function () {
     const voiceAudio     = document.getElementById('voice-audio');
     const placeholder    = document.getElementById('video-placeholder');
     const placeholderText= document.getElementById('placeholder-text');
-    const unmuteOverlayBtn = document.getElementById('unmute-overlay-btn');
     const overlayControls = document.getElementById('video-overlay-controls');
     const overlayMuteBtn = document.getElementById('overlay-mute-btn');
     const overlayPauseBtn= document.getElementById('overlay-pause-btn');
@@ -794,17 +793,8 @@ window.addEventListener('load', function () {
         }
     }
 
-    // Click anywhere on the video to unmute it
-    videoPlayer.addEventListener('click', function () {
-        if (videoPlayer.srcObject && videoPlayer.muted) {
-            videoPlayer.muted = false;
-            videoPlayer.play().catch(function () {});
-        }
-        unlockAllAudio();
-    });
     placeholder.addEventListener('click', function () {
         if (videoPlayer.srcObject) {
-            videoPlayer.muted = false;
             placeholder.classList.add('hidden');
             videoPlayer.play().catch(function () {});
         }
@@ -936,13 +926,6 @@ window.addEventListener('load', function () {
             overlayMuteBtn.innerHTML = isMuted ? SVG_SPEAKER_MUTED : SVG_SPEAKER_ON;
             overlayMuteBtn.title = isMuted ? 'Unmute Movie Audio' : 'Mute Movie Audio';
         }
-        if (unmuteOverlayBtn) {
-            if (isMuted && videoPlayer.srcObject) {
-                unmuteOverlayBtn.classList.remove('hidden');
-            } else {
-                unmuteOverlayBtn.classList.add('hidden');
-            }
-        }
     }
 
     function syncPlaybackUI() {
@@ -978,8 +961,8 @@ window.addEventListener('load', function () {
     let overlayHideTimer = null;
     function toggleOverlayControls(e) {
         if (!overlayControls) return;
-        // Don't toggle if user clicked directly on one of the action buttons or unmute overlay
-        if (e && e.target && (e.target.closest('#video-overlay-controls') || e.target.closest('#unmute-overlay-btn'))) {
+        // Don't toggle if user clicked directly on one of the action buttons
+        if (e && e.target && e.target.closest('#video-overlay-controls')) {
             return;
         }
 
@@ -1062,15 +1045,6 @@ window.addEventListener('load', function () {
             overlayHideTimer = setTimeout(function () {
                 overlayControls.classList.remove('visible');
             }, 4000);
-        });
-    }
-
-    if (unmuteOverlayBtn) {
-        unmuteOverlayBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            videoPlayer.muted = false;
-            videoPlayer.play().catch(function () {});
-            syncAudioUI();
         });
     }
 
