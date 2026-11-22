@@ -463,6 +463,7 @@ window.addEventListener('load', function () {
     }
 
     function stopShare() {
+        muteAndReleaseMic();
         if (localStream) { localStream.getTracks().forEach(function (t) { t.stop(); }); localStream = null; }
         videoPlayer.srcObject = null;
         peerVoiceCalls.clear();
@@ -802,65 +803,114 @@ window.addEventListener('load', function () {
     });
 
     // ══════════════════════════════════════════════════════════════════════════
-    // 4. Microphone (Full Group Voice Chat)
+    // 4. Microphone (Full Group Voice Chat with Hardware Release on Mute)
     // ══════════════════════════════════════════════════════════════════════════
-    micBtn.addEventListener('click', async function () {
-        unlockAllAudio();
-        if (!localMicStream) {
-            try {
-                localMicStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-                    video: false
-                });
-                micTrack = localMicStream.getAudioTracks()[0];
-                micTrack.enabled = true;
-                micBtn.textContent = 'Mic: On (Talking)';
-                micBtn.className = 'btn btn-success';
+    async function startMic() {
+        try {
+            localMicStream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                video: false
+            });
+            micTrack = localMicStream.getAudioTracks()[0];
+            micTrack.enabled = true;
 
-                if (isHost) {
-                    // Hook host mic into the mixer for all connected viewers
-                    hookHostMicToMixer();
-                } else {
-                    // Viewer: replace track on existing voice call
-                    let trackReplaced = false;
-                    if (activeVoiceCall && activeVoiceCall.peerConnection) {
-                        try {
-                            const senders = activeVoiceCall.peerConnection.getSenders();
-                            senders.forEach(function (sender) {
-                                if (sender.track && sender.track.kind === 'audio') {
-                                    sender.replaceTrack(micTrack);
-                                    trackReplaced = true;
-                                }
-                            });
-                        } catch (e) {}
-                    }
-                    // Fallback only if no active voice call was open yet
-                    if (!trackReplaced && roomId) {
-                        activeVoiceCall = peer.call(roomId, localMicStream, { metadata: { type: 'voice' } });
-                        if (activeVoiceCall) {
-                            activeVoiceCall.on('stream', function (stream) {
-                                voiceAudio.muted = false;
-                                voiceAudio.volume = 1.0;
-                                voiceAudio.srcObject = stream;
-                                voiceAudio.play().catch(function () {});
-                            });
-                        }
-                    }
-                }
-            } catch (e) {
-                alert('Microphone permission denied.');
-            }
-            return;
-        }
+            micTrack.onended = function () {
+                muteAndReleaseMic();
+            };
 
-        micTrack.enabled = !micTrack.enabled;
-        if (micTrack.enabled) {
             micBtn.textContent = 'Mic: On (Talking)';
             micBtn.className = 'btn btn-success';
-        } else {
-            micBtn.textContent = 'Mic: Muted';
+
+            if (isHost) {
+                // Hook host mic into the mixer for all connected viewers
+                hookHostMicToMixer();
+            } else {
+                // Viewer: replace track on existing voice call
+                let trackReplaced = false;
+                if (activeVoiceCall && activeVoiceCall.peerConnection) {
+                    try {
+                        const senders = activeVoiceCall.peerConnection.getSenders();
+                        senders.forEach(function (sender) {
+                            if (sender.track && sender.track.kind === 'audio') {
+                                sender.replaceTrack(micTrack);
+                                trackReplaced = true;
+                            }
+                        });
+                    } catch (e) {}
+                }
+                // Fallback only if no active voice call was open yet
+                if (!trackReplaced && roomId) {
+                    activeVoiceCall = peer.call(roomId, localMicStream, { metadata: { type: 'voice' } });
+                    if (activeVoiceCall) {
+                        activeVoiceCall.on('stream', function (stream) {
+                            voiceAudio.muted = false;
+                            voiceAudio.volume = 1.0;
+                            voiceAudio.srcObject = stream;
+                            voiceAudio.play().catch(function () {});
+                        });
+                    }
+                }
+            }
+        } catch (e) {
+            alert('Microphone permission denied or device in use by another app.');
+            micBtn.textContent = 'Join Voice Chat';
             micBtn.className = 'btn btn-secondary';
         }
+    }
+
+    function muteAndReleaseMic() {
+        if (isHost) {
+            if (hostMicSourceNode) {
+                try { hostMicSourceNode.disconnect(); } catch (e) {}
+                hostMicSourceNode = null;
+            }
+        } else {
+            // Replace with silent software oscillator track so WebRTC voice connection stays alive
+            const silentStream = createSilentAudioStream();
+            const silentTrack = silentStream ? silentStream.getAudioTracks()[0] : null;
+            if (activeVoiceCall && activeVoiceCall.peerConnection && silentTrack) {
+                try {
+                    const senders = activeVoiceCall.peerConnection.getSenders();
+                    senders.forEach(function (sender) {
+                        if (sender.track && sender.track.kind === 'audio') {
+                            sender.replaceTrack(silentTrack);
+                        }
+                    });
+                } catch (e) {}
+            }
+        }
+
+        // Completely stop all tracks on the hardware mic stream to release the OS device lock
+        if (localMicStream) {
+            localMicStream.getTracks().forEach(function (t) {
+                try { t.stop(); } catch (e) {}
+            });
+            localMicStream = null;
+            micTrack = null;
+        }
+
+        micBtn.textContent = 'Mic: Muted';
+        micBtn.className = 'btn btn-secondary';
+    }
+
+    let micToggling = false;
+    micBtn.addEventListener('click', async function () {
+        unlockAllAudio();
+        if (micToggling) return;
+        micToggling = true;
+        try {
+            if (!localMicStream) {
+                await startMic();
+            } else {
+                muteAndReleaseMic();
+            }
+        } finally {
+            micToggling = false;
+        }
+    });
+
+    window.addEventListener('beforeunload', function () {
+        muteAndReleaseMic();
     });
 
     // ══════════════════════════════════════════════════════════════════════════
