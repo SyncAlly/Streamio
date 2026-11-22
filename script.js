@@ -135,58 +135,77 @@ window.addEventListener('load', function () {
         }
     }
 
-    // ── Pure Tailscale WebRTC Engine (100.x.x.x Only) ─────────────────────────
-    const TAILSCALE_HOST_IP = '100.109.86.125';
+    // ── Dynamic Tailscale WebRTC Engine ────────────────────────────────────────
+    // Detects host's real Tailscale 100.x IP at runtime (no hardcode).
+    // Viewers receive the host IP via data channel before ICE negotiation.
+    // Falls back to STUN (srflx) if no Tailscale path exists (cross-tailnet).
+
+    let hostTailscaleIp = null; // Set by host after self-detection; set by viewer after receiving via data channel
+
+    // Detect this device's own Tailscale 100.x IP via a local ICE gather
+    function detectOwnTailscaleIp(callback) {
+        try {
+            var pc = new RTCPeerConnection({ iceServers: [] });
+            pc.createDataChannel('_detect');
+            pc.onicecandidate = function (evt) {
+                if (!evt || !evt.candidate) { pc.close(); return; }
+                var m = evt.candidate.candidate.match(/\b(100\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/);
+                if (m) { pc.close(); callback(m[1]); }
+            };
+            pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function () { pc.close(); });
+            setTimeout(function () { try { pc.close(); } catch (e) {} }, 5000);
+        } catch (e) {}
+    }
 
     (function patchRTCForTailscaleOnly() {
         if (typeof RTCPeerConnection === 'undefined') return;
 
-        // Helper: check if candidate string contains a Tailscale 100.x IP
         function isTailscaleCandidate(str) {
             return /\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/.test(str);
         }
-
-        // Helper: build a resolved ICE candidate string from a .local candidate
+        // srflx = STUN public candidate — allowed as fallback when no Tailscale path
+        function isStunFallback(str) {
+            return str.indexOf(' srflx ') !== -1;
+        }
         function resolveMdns(str, realIp, suffix) {
             var resolved = str.replace(/\S+\.local/gi, realIp);
-            if (suffix) {
-                resolved = resolved.replace(/^(candidate:\S+)/, '$1' + suffix);
-            }
+            if (suffix) resolved = resolved.replace(/^(candidate:\S+)/, '$1' + suffix);
             return resolved;
         }
+        function getHostIp() {
+            return hostTailscaleIp || null;
+        }
 
-        // 1. addIceCandidate: Only accept Tailscale (100.x) candidates
+        // 1. addIceCandidate: Accept Tailscale (100.x) + STUN fallback
         var _origAdd = RTCPeerConnection.prototype.addIceCandidate;
         RTCPeerConnection.prototype.addIceCandidate = function (candidate) {
-            if (!candidate || !candidate.candidate) {
-                return _origAdd.apply(this, arguments);
-            }
-
+            if (!candidate || !candidate.candidate) return _origAdd.apply(this, arguments);
             var c = candidate.candidate;
             var sdpMid = candidate.sdpMid;
             var sdpIdx = candidate.sdpMLineIndex;
 
-            // When viewer receives a .local candidate from host, resolve directly to Tailscale Host IP
+            // Viewer: resolve .local mDNS using dynamically known host Tailscale IP
             if (!isHost && c.indexOf('.local') !== -1) {
-                try {
-                    return _origAdd.call(this, new RTCIceCandidate({
-                        candidate: resolveMdns(c, TAILSCALE_HOST_IP, 'ts'),
-                        sdpMid: sdpMid, sdpMLineIndex: sdpIdx
-                    })).catch(function () {});
-                } catch (e) {
-                    return Promise.resolve();
+                var hip = getHostIp();
+                if (hip) {
+                    try {
+                        return _origAdd.call(this, new RTCIceCandidate({
+                            candidate: resolveMdns(c, hip, 'ts'),
+                            sdpMid: sdpMid, sdpMLineIndex: sdpIdx
+                        })).catch(function () {});
+                    } catch (e) { return Promise.resolve(); }
                 }
+                return Promise.resolve(); // drop if host IP unknown yet
             }
 
-            // Drop all non-Tailscale candidates (LAN, STUN/srflx, TURN/relay)
-            if (!isTailscaleCandidate(c)) {
-                return Promise.resolve();
+            // Pass Tailscale candidates and STUN fallback; drop everything else
+            if (isTailscaleCandidate(c) || isStunFallback(c)) {
+                return _origAdd.apply(this, arguments);
             }
-
-            return _origAdd.apply(this, arguments);
+            return Promise.resolve();
         };
 
-        // 2. setRemoteDescription: Filter SDP to keep ONLY Tailscale candidate lines
+        // 2. setRemoteDescription: Filter SDP
         var _origSetRemote = RTCPeerConnection.prototype.setRemoteDescription;
         RTCPeerConnection.prototype.setRemoteDescription = function (desc) {
             if (desc && typeof desc.sdp === 'string') {
@@ -195,15 +214,15 @@ window.addEventListener('load', function () {
                 for (var i = 0; i < lines.length; i++) {
                     var l = lines[i];
                     if (l.startsWith('a=candidate:')) {
-                        // Resolve host .local to Tailscale Host IP for viewers
                         if (!isHost && l.indexOf('.local') !== -1) {
-                            filtered.push(l.replace(/\S+\.local/gi, TAILSCALE_HOST_IP).replace(/^(a=candidate:\S+)/, '$1ts'));
+                            var hip = getHostIp();
+                            if (hip) {
+                                filtered.push(l.replace(/\S+\.local/gi, hip).replace(/^(a=candidate:\S+)/, '$1ts'));
+                            }
+                            // else drop — host IP not yet known
                             continue;
                         }
-                        // Drop any candidate line that is not Tailscale (100.x)
-                        if (!isTailscaleCandidate(l)) {
-                            continue;
-                        }
+                        if (!isTailscaleCandidate(l) && !isStunFallback(l)) continue;
                     }
                     filtered.push(l);
                 }
@@ -212,7 +231,7 @@ window.addEventListener('load', function () {
             return _origSetRemote.apply(this, [desc]);
         };
 
-        // 3. onicecandidate setter: Host and Viewer only emit Tailscale candidates
+        // 3. onicecandidate setter: Host emits Tailscale + STUN; viewer emits own Tailscale + STUN
         var descProp = Object.getOwnPropertyDescriptor(RTCPeerConnection.prototype, 'onicecandidate');
         if (descProp && descProp.set) {
             var _origSetOnIce = descProp.set;
@@ -220,33 +239,29 @@ window.addEventListener('load', function () {
                 set: function (fn) {
                     if (typeof fn !== 'function') return _origSetOnIce.call(this, fn);
                     var wrapped = function (evt) {
-                        // Null candidate = end of candidates, must pass through
-                        if (!evt || !evt.candidate || !evt.candidate.candidate) {
-                            return fn.apply(this, arguments);
-                        }
+                        if (!evt || !evt.candidate || !evt.candidate.candidate) return fn.apply(this, arguments);
                         var str = evt.candidate.candidate;
                         var sdpMid = evt.candidate.sdpMid;
                         var sdpIdx = evt.candidate.sdpMLineIndex;
 
-                        // On host: when Chrome masks host IP with .local, emit real Tailscale candidate
+                        // Host: replace .local with real detected Tailscale IP
                         if (isHost && str.indexOf('.local') !== -1) {
-                            try {
-                                fn.call(this, {
-                                    candidate: new RTCIceCandidate({
-                                        candidate: resolveMdns(str, TAILSCALE_HOST_IP, 'ts'),
+                            var hip = getHostIp();
+                            if (hip) {
+                                try {
+                                    fn.call(this, { candidate: new RTCIceCandidate({
+                                        candidate: resolveMdns(str, hip, 'ts'),
                                         sdpMid: sdpMid, sdpMLineIndex: sdpIdx
-                                    })
-                                });
-                            } catch (e) {}
+                                    })});
+                                } catch (e) {}
+                            }
                             return;
                         }
 
-                        // Drop any candidate that is not a Tailscale 100.x IP
-                        if (!isTailscaleCandidate(str)) {
-                            return;
+                        // Pass Tailscale + STUN fallback; drop LAN/relay
+                        if (isTailscaleCandidate(str) || isStunFallback(str)) {
+                            return fn.apply(this, arguments);
                         }
-
-                        return fn.apply(this, arguments);
                     };
                     return _origSetOnIce.call(this, wrapped);
                 },
@@ -373,7 +388,7 @@ window.addEventListener('load', function () {
                                 }
                                 params.encodings[0].maxBitrate = 2500000;
                                 params.encodings[0].scaleResolutionDownBy = 1.0;
-                                params.degradationPreference = 'balanced';
+                                params.degradationPreference = 'maintain-framerate';
                                 sender.setParameters(params).catch(function () {});
                             }
                         });
@@ -404,6 +419,8 @@ window.addEventListener('load', function () {
             userNameInput.placeholder = 'Your name (Host)';
         }
         viewerCounter = 0;
+        // Detect own Tailscale IP immediately — used for .local ICE resolution on viewer side
+        detectOwnTailscaleIp(function (ip) { hostTailscaleIp = ip; });
         const hostId = 'mw-' + Math.random().toString(36).substring(2, 8);
         peer = new Peer(hostId, PEER_OPTIONS);
 
@@ -436,7 +453,7 @@ window.addEventListener('load', function () {
             conn.on('open', function () {
                 connectedPeers.add(conn.peer);
                 viewerCounter++;
-                conn.send({ type: 'assign-name', name: 'Friend ' + viewerCounter });
+                conn.send({ type: 'assign-name', name: 'Friend ' + viewerCounter, hostIp: hostTailscaleIp || '' });
                 updateStatus('Live • Friend Connected', 'badge-connected');
                 if (localStream) callPeerWithStream(conn.peer, localStream, 'screen');
 
@@ -926,8 +943,12 @@ window.addEventListener('load', function () {
         conn.on('data', function (data) {
             if (!data) return;
 
-            // Handle name assignment from host
+            // Handle name assignment from host (also carries host's Tailscale IP for ICE resolution)
             if (data.type === 'assign-name' && data.name) {
+                // Store host's Tailscale IP so .local ICE candidates resolve correctly
+                if (data.hostIp && /^100\./.test(data.hostIp)) {
+                    hostTailscaleIp = data.hostIp;
+                }
                 const hasCustomName = (typeof localStorage !== 'undefined') && localStorage.getItem('streamio_username');
                 if (!hasCustomName) {
                     mySenderName = data.name;
