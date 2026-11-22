@@ -47,6 +47,8 @@
             <!-- Player Controls -->
             <div id="controls">
                 <button id="screen-share-btn" class="btn btn-primary">Start Screen Share</button>
+                <!-- Quality toggle: 1080p (default) vs 720p (for low-end CPUs like Celeron) -->
+                <button id="quality-toggle-btn" class="btn btn-secondary" title="Switch capture resolution. Use 720p if hosting on a slow CPU (Celeron, older laptops).">📺 1080p</button>
                 <!-- 2-Way Voice Chat (Mic) Button -->
                 <button id="mic-btn" class="btn btn-secondary">Join Voice Chat</button>
                 <!-- User Display Name Input -->
@@ -85,6 +87,6 @@
     <!-- Floating Toast Notification Bubble Container (Bottom-Left) -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <script src="script.js?v=14" defer></script>
+    <script src="script.js?v=15" defer></script>
 </body>
 </html>

@@ -16,6 +16,20 @@ window.addEventListener('load', function () {
     const statusBadge    = document.getElementById('status-badge');
     const routeBadge     = document.getElementById('route-badge');
     const screenShareBtn = document.getElementById('screen-share-btn');
+    const qualityToggleBtn = document.getElementById('quality-toggle-btn');
+
+    // Capture quality: '1080p' (default, needs decent CPU) or '720p' (for Celeron / older laptops)
+    let captureQuality = '1080p';
+    if (qualityToggleBtn) {
+        qualityToggleBtn.addEventListener('click', function () {
+            if (localStream) return; // can't change while sharing
+            captureQuality = captureQuality === '1080p' ? '720p' : '1080p';
+            qualityToggleBtn.textContent = '📺 ' + captureQuality;
+            qualityToggleBtn.title = captureQuality === '720p'
+                ? 'Capturing at 720p — good for Celeron / older CPUs. Click to switch to 1080p.'
+                : 'Capturing at 1080p — needs a mid-range CPU. Click to switch to 720p for weaker machines.';
+        });
+    }
 
     // ── SVG Icons for Aligned Indicators & Overlay Controls ──────────────────
     const SVG_HOUSE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>';
@@ -308,12 +322,17 @@ window.addEventListener('load', function () {
         if (localStream) { stopShare(); return; }
 
         try {
-            // Max 1080p, 30 FPS (Optimized for cinema & movie streaming; 24 FPS native playback)
+            // Resolution based on host's quality selection:
+            // 1080p: ideal for Core i3+, Ryzen, modern hardware with Quick Sync
+            // 720p:  for Celeron, older Atom, any CPU that struggles to encode 1080p @ 30 FPS
+            const isHD = captureQuality === '720p';
+            const capW = isHD ? 1280 : 1920;
+            const capH = isHD ? 720  : 1080;
             localStream = await navigator.mediaDevices.getDisplayMedia({
                 video: {
                     cursor: 'always',
-                    width: { ideal: 1920, max: 1920 },
-                    height: { ideal: 1080, max: 1080 },
+                    width:     { ideal: capW, max: capW },
+                    height:    { ideal: capH, max: capH },
                     frameRate: { ideal: 30, max: 30 }
                 },
                 audio: true
@@ -376,17 +395,17 @@ window.addEventListener('load', function () {
                         });
                     }
 
-                    // Optimized 1080p Graphics: 2.5 Mbps Bitrate per peer, 30 FPS
-                    // 2.5 Mbps H.264 delivers full 1080p clarity for 24-30 FPS movies while
-                    // saving ~45% bandwidth and fitting comfortably within 8-10 Mbps/cellular connections.
+                    // Bitrate: 2.5 Mbps at 1080p, 1.5 Mbps at 720p (Celeron-friendly mode)
+                    // H.264 delivers full clarity at these rates for 24-30 FPS movies.
                     if (pc.getSenders) {
+                        const targetBitrate = captureQuality === '720p' ? 1500000 : 2500000;
                         pc.getSenders().forEach(function (sender) {
                             if (sender.track && sender.track.kind === 'video') {
                                 const params = sender.getParameters();
                                 if (!params.encodings || params.encodings.length === 0) {
                                     params.encodings = [{}];
                                 }
-                                params.encodings[0].maxBitrate = 2500000;
+                                params.encodings[0].maxBitrate = targetBitrate;
                                 params.encodings[0].scaleResolutionDownBy = 1.0;
                                 params.degradationPreference = 'maintain-framerate';
                                 sender.setParameters(params).catch(function () {});
